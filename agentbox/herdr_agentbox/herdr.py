@@ -23,7 +23,23 @@ class HerdrError(Exception):
 
 
 def socket_path() -> str:
-    return os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+    """HERDR_SOCKET_PATH (set in herdr panes and hooks), else HERDR_SESSION's socket,
+    else the default server's, else the only named session's."""
+    if os.environ.get("HERDR_SOCKET_PATH"):
+        return os.environ["HERDR_SOCKET_PATH"]
+    base = os.path.expanduser("~/.config/herdr")
+    session = os.environ.get("HERDR_SESSION")
+    if session:
+        return os.path.join(base, "sessions", session, "herdr.sock")
+    default = os.path.join(base, "herdr.sock")
+    if os.path.exists(default):
+        return default
+    try:
+        named = [os.path.join(base, "sessions", s, "herdr.sock") for s in os.listdir(os.path.join(base, "sessions"))]
+    except OSError:
+        named = []
+    live = [p for p in named if os.path.exists(p)]
+    return live[0] if len(live) == 1 else default
 
 
 def exchange(path: str, line: bytes, timeout: float = 5.0) -> bytes:
