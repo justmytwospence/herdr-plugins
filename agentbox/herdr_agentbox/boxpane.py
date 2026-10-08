@@ -24,11 +24,9 @@ import time
 import tty
 from typing import Any, Dict, List, Optional
 
-from . import config, herdr, hub, state
+from . import config, herdr, hub, state, ui
 
 POLL_S = 4.0
-CLEAR = "\033[2J\033[H"
-DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
 
 
 def agentbox() -> str:
@@ -51,24 +49,6 @@ def read_key(timeout: float) -> Optional[str]:
         return "\n" if ch in ("\r", "\n") else ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-def screen(title: str, lines: List[str], keys: str) -> None:
-    out = [CLEAR, "%s%s%s\n\n" % (BOLD, title, RESET)]
-    out += ["  %s\n" % line for line in lines if line]
-    out.append("\n%s%s%s\n" % (DIM, keys, RESET))
-    sys.stdout.write("".join(out))
-    sys.stdout.flush()
-
-
-def describe(b: Dict[str, Any]) -> List[str]:
-    agents = b.get("agentStatus") or {}
-    states = ", ".join("%s %s" % (k, v.get("state")) for k, v in agents.items()) or str(b.get("agent") or "")
-    return [
-        "%s on %s" % (b.get("repo") or "?", b.get("provider") or "?"),
-        "agent: %s" % states,
-        ("task: %s" % b["task"]) if b.get("task") and b.get("task") != b.get("name") else "",
-    ]
 
 
 def report_paused(b: Dict[str, Any], status: str) -> None:
@@ -168,14 +148,19 @@ def next_step(status: Optional[str], detached: bool) -> str:
     return "error"
 
 
+KEYS_QUIT = ("q", "Q")
+
+
 def run(box_id: str) -> int:
     state.unpark(box_id)
     detached = False
+    hint = ""
     while True:
         got = fetch(box_id)
         if got["error"]:
-            screen("hub unreachable", [got["error"]], "retrying every few seconds · q: plain shell")
-            if read_key(POLL_S) == "q":
+            ui.show(ui.card(box_id, "hub unreachable", None, [("q", "plain shell")],
+                            footer=got["error"], hint="retrying every few seconds"))
+            if read_key(POLL_S) in KEYS_QUIT:
                 return park(box_id)
             continue
         b = got["box"]
@@ -185,63 +170,70 @@ def run(box_id: str) -> int:
             again = fetch(box_id)["box"]
             # Still running after the attach ended: the user detached.
             detached = bool(again and again.get("status") == "running")
+            hint = ""
             continue
-        assert b is not None or step == "gone"
-        if step == "gone":
-            screen("%s no longer exists" % box_id, ["destroyed, or not on this hub"],
-                   "this space closes on its own · q: plain shell now")
-            if read_key(30) == "q":
+        if step == "gone" or b is None:
+            ui.show(ui.card(box_id, "gone", None, [("q", "plain shell now")],
+                            footer="Destroyed, or not on this hub. This space closes on its own."))
+            if read_key(30) in KEYS_QUIT:
                 return 0
             continue
-        name = hub.label(b)
+        name, agent = hub.label(b), box_agent(b)
         if step == "detached":
-            screen("%s: detached" % name, describe(b), "Enter: reattach · s: shell in the box · q: plain shell")
+            ui.show(ui.card(name, "detached", b, [("Enter", "reattach"), ("s", "shell in the box"),
+                                                  ("q", "plain shell")], agent=agent, hint=hint))
             key = read_key(POLL_S * 5)
+            hint = ""
             if key == "\n":
                 detached = False
             elif key == "s":
                 shell(box_id)
-            elif key == "q":
+            elif key in KEYS_QUIT:
                 return park(box_id)
+            elif key:
+                hint = "(Enter reattaches)"
             continue
         if step == "paused":
             report_paused(b, b["status"])
-            screen("%s is %s" % (name, b["status"]), describe(b),
-                   "Enter: resume and attach · q: plain shell (resumed elsewhere, it attaches here)")
+            soon = "a few seconds" if ui.where(b) == "NUC" else "up to a minute"
+            ui.show(ui.card(name, b["status"], b, [("Enter", "%s and attach   %s" % (
+                "resume" if b["status"] == "paused" else "start", soon)), ("q", "plain shell")],
+                agent=agent, footer="Resumed anywhere else, it attaches here on its own.", hint=hint))
             key = read_key(POLL_S)
             if key == "\n":
-                sys.stdout.write("\nresuming %s...\n" % name)
-                sys.stdout.flush()
-                try:
-                    hub.lifecycle(box_id, "resume" if b["status"] == "paused" else "start")
-                except hub.HubError as e:
-                    screen("could not resume %s" % name, [str(e)], "any key")
-                    read_key(60)
+                hint = ""
+                error = ui.resume(box_id, b, lambda: (fetch(box_id)["box"] or {}).get("status") == "running")
+                if error:
+                    hint = "%sresume failed: %s%s" % (ui.RED, error[:200], ui.RESET)
                 detached = False
-            elif key == "q":
+            elif key in KEYS_QUIT:
                 return park(box_id)
+            elif key:
+                hint = "(input discarded: the box is %s; Enter %s it)" % (
+                    b["status"], "resumes" if b["status"] == "paused" else "starts")
             continue
         if step == "wait":
-            screen("%s is being created" % name, describe(b), "attaches when ready · q: plain shell")
-            if read_key(POLL_S) == "q":
+            ui.show(ui.card(name, "creating", b, [("q", "plain shell")], agent=agent,
+                            footer="Attaches here when it is ready."))
+            if read_key(POLL_S) in KEYS_QUIT:
                 return park(box_id)
             continue
-        screen("%s: %s" % (name, b.get("status")), describe(b) + [str(b.get("error") or "")],
-               "Enter: try to start it · q: plain shell")
+        ui.show(ui.card(name, str(b.get("status")), b, [("Enter", "try to start it"), ("q", "plain shell")],
+                        agent=agent, hint=hint))
         key = read_key(POLL_S * 5)
+        hint = ""
         if key == "\n":
             try:
                 hub.lifecycle(box_id, "start")
             except hub.HubError as e:
-                screen("could not start %s" % name, [str(e)], "any key")
-                read_key(60)
-        elif key == "q":
+                hint = "%sstart failed: %s%s" % (ui.RED, str(e)[:200], ui.RESET)
+        elif key in KEYS_QUIT:
             return park(box_id)
 
 
 def park(box_id: str) -> int:
     state.park(box_id)
-    sys.stdout.write(CLEAR + "Parked. `agentbox-space box` here brings %s back.\n" % box_id)
+    sys.stdout.write(ui.CLEAR + "Parked. `agentbox-space box` here brings %s back.\n" % box_id)
     return 0
 
 

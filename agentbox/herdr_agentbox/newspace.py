@@ -25,10 +25,9 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
-from . import config, herdr, hub, state
+from . import config, herdr, hub, state, ui
 
 GH_CACHE_S = 24 * 3600
-CREATE_TIMEOUT_S = 20 * 60
 
 
 # ---- the hook -----------------------------------------------------------------
@@ -170,30 +169,6 @@ def box_name(repo: str, taken: List[str], rng: Optional[random.Random] = None) -
     return "%s-%d" % (short, int(time.time()))
 
 
-def wait_for(name: str, job_id: str) -> Optional[str]:
-    """The new box's id once the hub lists it, or None (failed, timed out)."""
-    start = time.time()
-    while time.time() - start < CREATE_TIMEOUT_S:
-        try:
-            boxes = hub.boxes()
-        except hub.HubError as e:
-            say("\r  hub: %s" % e, end="")
-            boxes = []
-        for b in boxes:
-            if b.get("name") != name:
-                continue
-            if not str(b.get("id", "")).startswith("job:"):
-                return str(b["id"])
-            if b.get("status") == "error":
-                say("\n  create failed: %s" % (b.get("error") or "see the hub's web UI"))
-                return None
-        say("\r  creating %s ... %ds " % (name, time.time() - start), end="")
-        time.sleep(4)
-    say("\n  still not created after %d min; it may yet appear (it gets its own space then)"
-        % (CREATE_TIMEOUT_S // 60))
-    return None
-
-
 def pick(workspace_id: str) -> str:
     """Shell code for the pane: into the new box, or nothing (stay a plain shell)."""
     cfg = config.settings()
@@ -217,13 +192,18 @@ def pick(workspace_id: str) -> str:
     name = box_name(repo, [str(b.get("name")) for b in boxes])
     state.add_pending(name, workspace_id)
     herdr.quiet("workspace.rename", {"workspace_id": workspace_id, "label": name})
-    say("%s: %s with %s on %s" % (name, repo, agent, where))
     try:
-        job = hub.create(repo, agent, provider, name, prompt or None)
-        box_id = wait_for(name, job)
+        job_id = hub.create(repo, agent, provider, name, prompt or None)
+        term = tty()
+        term.write(ui.CLEAR)
+        job = ui.follow_create(job_id, "New box %s" % name, "%s  ·  %s  ·  %s" % (repo, where.split(" (")[0], agent),
+                               agent, provider, stream=term)
     finally:
         state.drop_pending(name)
-    if not box_id:
+    box_id = str(job.get("boxId") or "")
+    if job.get("status") != "done" or not box_id:
+        say("  %s" % (job.get("error") or "the box was not created (status %s)" % job.get("status")))
+        say("  this stays a plain shell; the hub's web UI has the full log")
         return ""
     # The hub lists a new box's agent as claude until it reports; the pane reads this.
     with open(os.path.join(config.box_dir(box_id), ".agent"), "w") as f:
