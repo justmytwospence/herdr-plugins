@@ -1,0 +1,45 @@
+id = "agentbox-spaces"
+name = "herdr-agentbox"
+version = "0.1.0"
+min_herdr_version = "0.9.2"
+description = "One herdr space per AgentBox box: every box the hub owns, live agent state in the sidebar, Enter resumes a paused box, a new space makes a new box."
+platforms = ["linux", "macos"]
+
+# Starts the sync daemon (one space per box, restored panes reattached) once.
+[[startup]]
+command = ["python3", "-B", "agentbox-space.py", "daemon", "--ensure"]
+
+# A space the user opens becomes a new box (newspace.py); Esc keeps a plain shell.
+[[events]]
+on = "workspace.created"
+command = ["python3", "-B", "agentbox-space.py", "on-workspace-created"]
+
+[[actions]]
+id = "pause-focused"
+title = "agentbox: pause the focused box"
+contexts = ["pane"]
+command = ["python3", "-B", "agentbox-space.py", "action", "pause-focused"]
+
+[[actions]]
+id = "resume-focused"
+title = "agentbox: resume the focused box"
+contexts = ["pane"]
+command = ["python3", "-B", "agentbox-space.py", "action", "resume-focused"]
+
+[[actions]]
+id = "destroy-focused"
+title = "agentbox: destroy the focused box (run twice to confirm)"
+contexts = ["pane"]
+command = ["python3", "-B", "agentbox-space.py", "action", "destroy-focused"]
+
+[[actions]]
+id = "sync"
+title = "agentbox: sync box spaces now"
+contexts = ["global"]
+command = ["python3", "-B", "agentbox-space.py", "action", "sync"]
+
+[[actions]]
+id = "status"
+title = "agentbox: box status"
+contexts = ["global"]
+command = ["python3", "-B", "agentbox-space.py", "action", "status"]
