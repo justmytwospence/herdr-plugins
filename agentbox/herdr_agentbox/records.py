@@ -56,3 +56,11 @@ def ensure_sandbox_class(box_id: str, sandbox_class: str, path: Optional[str] = 
     os.chmod(tmp, os.stat(path).st_mode & 0o777)
     os.replace(tmp, path)
     return True
+
+
+def has_record(box_id: str, path: Optional[str] = None) -> bool:
+    try:
+        with open(path or state_path()) as f:
+            return _find(json.load(f), box_id) is not None
+    except (OSError, ValueError):
+        return False

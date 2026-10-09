@@ -94,18 +94,15 @@ def attach(box_id: str, agent: str, provider: str = "") -> int:
     """Run the attach, ending it when the box stops running: a paused container
     freezes the attach instead of ending it, which would leave a dead screen.
 
-    A Daytona box's local record needs its sandbox class (records.py). The first
-    attach on a machine is the one that writes the record, so when that attach
-    fails fast and the record then needed the fix, it runs once more."""
-    daytona = provider == "daytona"
-    cls = str(config.settings()["daytona_class"])
-    if daytona:
-        records.ensure_sandbox_class(box_id, cls)
-    started = time.time()
-    rc = attach_once(box_id, agent)
-    if daytona and time.time() - started < 90 and records.ensure_sandbox_class(box_id, cls):
-        rc = attach_once(box_id, agent)
-    return rc
+    A Daytona box's local record needs its sandbox class (records.py), and the
+    record is written when this machine adopts the box. So adopt it first
+    (`agentbox hub adopt`, quietly), give the record its class, then attach."""
+    if provider == "daytona":
+        if not records.has_record(box_id):
+            subprocess.call([agentbox(), "hub", "adopt", box_id],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        records.ensure_sandbox_class(box_id, str(config.settings()["daytona_class"]))
+    return attach_once(box_id, agent)
 
 
 def attach_once(box_id: str, agent: str) -> int:
