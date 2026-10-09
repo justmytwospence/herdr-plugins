@@ -177,7 +177,9 @@ def pick(workspace_id: str) -> str:
     repo = normalize_repo(repo or "")
     if not repo:
         return ""
-    agent = choose("agent", list(cfg["agents"]))
+    agents = [str(a) for a in cfg["agents"]]
+    default = str(cfg["default_agent"])
+    agent = choose("agent", [default] + [a for a in agents if a != default])
     if not agent:
         return ""
     labels = [str(p[0]) for p in cfg["providers"]]

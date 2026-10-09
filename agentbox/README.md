@@ -36,7 +36,7 @@ machine). It needs, on that host:
 - python3 (3.9+); `fzf` and `gh` make the new-space picker nicer.
 
 Settings, all optional, in `~/.config/herdr-agentbox/config.json`: `poll_s` (10),
-`new_space_creates_box` (true), `default_agent`, `agents`, `providers`
+`new_space_creates_box` (true), `default_agent` (pi; first in the picker), `agents`, `providers`
 (`[[label, provider spec], ...]`, default the hub's engine then Daytona).
 
 State and logs: `~/.local/state/herdr-agentbox/` (`boxes/<id>` is each box pane's

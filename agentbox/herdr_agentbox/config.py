@@ -19,10 +19,11 @@ DEFAULTS: Dict[str, Any] = {
     "poll_s": 10,
     # A space the user opens offers to become a new box.
     "new_space_creates_box": True,
-    "default_agent": "claude",
+    # First in the new-space picker, so Enter takes it.
+    "default_agent": "pi",
     # (label, provider spec) pairs offered for a new box; the first is the default.
     "providers": [["NUC (docker:hub)", "docker:hub"], ["Daytona", "daytona"]],
-    "agents": ["claude", "codex", "pi", "opencode"],
+    "agents": ["pi", "claude", "codex", "opencode"],
     # The class the Daytona base was baked with; adopted records lack it (records.py).
     "daytona_class": "container",
 }
