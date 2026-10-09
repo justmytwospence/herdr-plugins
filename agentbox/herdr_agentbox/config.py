@@ -23,6 +23,8 @@ DEFAULTS: Dict[str, Any] = {
     # (label, provider spec) pairs offered for a new box; the first is the default.
     "providers": [["NUC (docker:hub)", "docker:hub"], ["Daytona", "daytona"]],
     "agents": ["claude", "codex", "pi", "opencode"],
+    # The class the Daytona base was baked with; adopted records lack it (records.py).
+    "daytona_class": "container",
 }
 
 

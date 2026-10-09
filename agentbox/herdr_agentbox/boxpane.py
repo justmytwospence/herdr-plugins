@@ -24,7 +24,7 @@ import time
 import tty
 from typing import Any, Dict, List, Optional
 
-from . import config, herdr, hub, state, ui
+from . import config, herdr, hub, records, state, ui
 
 POLL_S = 4.0
 
@@ -90,9 +90,25 @@ def attach_argv(box_id: str, agent: str) -> List[str]:
     return [agentbox(), "attach", "--inline", box_id]
 
 
-def attach(box_id: str, agent: str) -> int:
+def attach(box_id: str, agent: str, provider: str = "") -> int:
     """Run the attach, ending it when the box stops running: a paused container
-    freezes the attach instead of ending it, which would leave a dead screen."""
+    freezes the attach instead of ending it, which would leave a dead screen.
+
+    A Daytona box's local record needs its sandbox class (records.py). The first
+    attach on a machine is the one that writes the record, so when that attach
+    fails fast and the record then needed the fix, it runs once more."""
+    daytona = provider == "daytona"
+    cls = str(config.settings()["daytona_class"])
+    if daytona:
+        records.ensure_sandbox_class(box_id, cls)
+    started = time.time()
+    rc = attach_once(box_id, agent)
+    if daytona and time.time() - started < 90 and records.ensure_sandbox_class(box_id, cls):
+        rc = attach_once(box_id, agent)
+    return rc
+
+
+def attach_once(box_id: str, agent: str) -> int:
     proc = subprocess.Popen(attach_argv(box_id, agent))
     not_running = 0
     while True:
@@ -166,7 +182,7 @@ def run(box_id: str) -> int:
         b = got["box"]
         step = next_step(b.get("status") if b else None, detached)
         if step == "attach":
-            attach(box_id, box_agent(b or {"id": box_id}))
+            attach(box_id, box_agent(b or {"id": box_id}), str((b or {}).get("provider") or ""))
             again = fetch(box_id)["box"]
             # Still running after the attach ended: the user detached.
             detached = bool(again and again.get("status") == "running")
