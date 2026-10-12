@@ -1,0 +1,24 @@
+id = "git-status"
+name = "Git working-tree status"
+version = "0.1.0"
+min_herdr_version = "0.7.5"
+description = "Changed paths, conflicts and synchronization on every space, including worktree children"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["python3", "git_status.py", "restore"]
+
+[[actions]]
+id = "enable"
+title = "Enable working-tree status"
+command = ["python3", "git_status.py", "enable"]
+
+[[actions]]
+id = "disable"
+title = "Disable working-tree status"
+command = ["python3", "git_status.py", "disable"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh working-tree status now"
+command = ["python3", "git_status.py", "once"]
