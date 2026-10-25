@@ -31,11 +31,7 @@ python3 sort_spaces.py --dry-run
 
 ## Installation
 
-```sh
-herdr plugin install justmytwospence/herdr-sort-spaces
-```
-
-For development, link the checkout:
+The plugin is not published; link the checkout:
 
 ```sh
 herdr plugin link ~/Projects/herdr-sort-spaces
