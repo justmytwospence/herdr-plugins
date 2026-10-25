@@ -45,6 +45,12 @@ directory, which is how panes are found again after a herdr restart; `logs/daemo
 `agentbox-space status` lists the boxes and their spaces; `agentbox-space sync` runs one
 daemon pass.
 
+The startup hook writes `~/.local/bin/agentbox-space`, a small wrapper that asks herdr for
+the plugin's current directory each time it runs: herdr 0.9.4+ installs every plugin
+update in a new directory and deletes old ones at server start. `daemon --ensure` (the
+hook) also stops a daemon still running from another directory and starts it from the
+current one, so after an update run `agentbox-space daemon --ensure`, or restart herdr.
+
 Tests: `python3 -B -m unittest discover -s tests -t .`
 
 MIT licensed.

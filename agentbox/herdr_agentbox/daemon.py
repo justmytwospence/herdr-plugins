@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -39,33 +40,97 @@ def running_pid() -> Optional[int]:
         return None
 
 
+PLUGIN_ID = "agentbox-spaces"
+WRAPPER_MARK = "# herdr-agentbox wrapper"
+
+
+def wrapper_script() -> str:
+    """~/.local/bin/agentbox-space: finds the plugin when it runs, not when it was written.
+
+    herdr (0.9.4+) installs each plugin generation in its own directory and deletes old
+    ones at server start, so a link into PLUGIN_ROOT can dangle until the startup hook
+    runs again. The wrapper asks herdr for the current root, then falls back to this one.
+    """
+    stable = config.home(".local", "share", "plugins", "herdr-agentbox")
+    return """#!/bin/sh
+%(mark)s: written by the plugin's startup hook; edits are overwritten.
+root=%(stable)s
+[ -f "$root/agentbox-space.py" ] || root=$("${HERDR_BIN_PATH:-herdr}" plugin list --plugin %(id)s --json 2>/dev/null |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["plugins"][0]["plugin_root"])' 2>/dev/null)
+[ -f "$root/agentbox-space.py" ] || root=%(fallback)s
+exec python3 -B "$root/agentbox-space.py" "$@"
+""" % {"mark": WRAPPER_MARK, "stable": shlex.quote(stable), "id": PLUGIN_ID,
+       "fallback": shlex.quote(config.PLUGIN_ROOT)}
+
+
 def link_command() -> None:
-    """~/.local/bin/agentbox-space -> this checkout (its stable plugins path when
-    there is one), so panes and the user can call it by name."""
-    stable = config.home(".local", "share", "plugins", "herdr-agentbox", "agentbox-space.py")
-    target = stable if os.path.exists(stable) else os.path.join(config.PLUGIN_ROOT, "agentbox-space.py")
+    """Write ~/.local/bin/agentbox-space (wrapper_script), so panes and the user can call
+    it by name. Replaces an old symlink or wrapper, never a file of the user's own."""
     link = config.home(".local", "bin", "agentbox-space")
+    script = wrapper_script()
     try:
-        if os.path.realpath(link) != os.path.realpath(target):
-            os.makedirs(os.path.dirname(link), exist_ok=True)
-            if os.path.islink(link) or not os.path.exists(link):
-                tmp = link + ".tmp"
-                if os.path.lexists(tmp):
-                    os.unlink(tmp)
-                os.symlink(target, tmp)
-                os.replace(tmp, link)
+        if not os.path.islink(link) and os.path.exists(link):
+            with open(link) as f:
+                current = f.read()
+            if current == script or WRAPPER_MARK not in current:
+                return
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        tmp = link + ".tmp"
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        with open(tmp, "w") as f:
+            f.write(script)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, link)
     except OSError as e:
-        log("could not link %s: %s" % (link, e))
+        log("could not write %s: %s" % (link, e))
+
+
+def _script() -> str:
+    return os.path.join(config.PLUGIN_ROOT, "agentbox-space.py")
+
+
+def daemon_script(pid: int) -> Optional[str]:
+    """The agentbox-space.py a running daemon was started from."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+    except OSError:
+        try:
+            out = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True,
+                                 text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        argv = out.split()
+    return next((a for a in argv if a.endswith("agentbox-space.py")), None)
+
+
+def stop_stale(pid: int) -> bool:
+    """Stop a daemon started from another plugin generation; True when it is gone."""
+    script = daemon_script(pid)
+    if script is None or os.path.realpath(script) == os.path.realpath(_script()):
+        return False
+    log("stopping daemon %d from %s (plugin now at %s)" % (pid, script, config.PLUGIN_ROOT))
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return True
+    for _ in range(50):
+        time.sleep(0.1)
+        if running_pid() != pid:
+            return True
+    return False
 
 
 def ensure() -> int:
     """Start the daemon detached unless it already runs."""
     link_command()
-    if running_pid():
+    pid = running_pid()
+    if pid and not stop_stale(pid):
         return 0
     with open(config.state_path("logs", "daemon.out"), "a") as out:
         subprocess.Popen(
-            [sys.executable, "-B", os.path.join(config.PLUGIN_ROOT, "agentbox-space.py"), "daemon"],
+            [sys.executable, "-B", _script(), "daemon"],
             stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True, close_fds=True,
             env=dict(os.environ),
         )
