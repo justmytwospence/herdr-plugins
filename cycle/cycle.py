@@ -2,11 +2,21 @@
 """Order the Agents list for cycling with next_agent.
 
 Order: the agent you are on, then blocked agents you have not visited since they
-blocked, then finished agents Herdr still reports unseen (`done`), then every other
-agent, least recently visited first. next_agent from the top therefore visits what
-needs you first, otherwise round-robins (the agent you leave was visited last).
+blocked, then agents whose prompt cache expires soon (soonest first) that you have
+not been on since, then finished agents Herdr still reports unseen (`done`), then
+every other agent, least recently visited first. next_agent from the top therefore
+visits what needs you first, otherwise round-robins (the agent you leave was
+visited last).
+
+"Expires soon" is pi-cache-guard's `cache_expires` pane token (13-digit epoch ms of
+the expiry, present only in the last minutes of a big idle cache and dropped by
+herdr at expiry). The view sorts on it directly, so an agent moves up when the
+token appears without this plugin running; without cache-guard nothing changes.
 
 Pane tokens (set with source plugin:agent-cycle, not displayed):
+  cycle_blocked  "0" blocked and unvisited, else absent
+  cycle_cache_ack  "1" once you were on the agent while its cache_expires was
+                   present (until that value changes or goes), else "0"
   cycle_rank  "0" blocked and unvisited, "1" done, "2" everything else
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
   cycle_cur_<host>  "1" on this server's focused pane (see current_token)
@@ -27,6 +37,8 @@ import herdr_rpc  # noqa: E402
 
 SOURCE = "plugin:agent-cycle"
 NEVER = "0" * 13
+# pi-cache-guard's token: when an idle session's big prompt cache expires, near the end.
+EXPIRES = "cache_expires"
 
 
 def current_token(host=None):
@@ -42,8 +54,12 @@ def current_token(host=None):
 
 
 def sort_spec(cur):
+    # Absent tokens sort after present ones.
     return [
         {"field": {"token": cur}, "order": "asc"},
+        {"field": {"token": "cycle_blocked"}, "order": "asc"},
+        {"field": {"token": "cycle_cache_ack"}, "order": "asc"},
+        {"field": {"token": EXPIRES}, "order": "asc"},
         {"field": {"token": "cycle_rank"}, "order": "asc"},
         {"field": {"token": "cycle_seen"}, "order": "asc"},
     ]
@@ -83,19 +99,33 @@ def save_state(state):
     os.replace(tmp, state_file())
 
 
-def update_pane(agent, entry, now):
-    """Track when a pane became blocked; return the updated entry."""
+def expires(agent):
+    return (agent.get("tokens") or {}).get(EXPIRES)
+
+
+def update_pane(agent, entry, now, on_it=False):
+    """Track when a pane became blocked and whether you were on it while its cache
+    was expiring (`on_it`); return the updated entry."""
     entry = dict(entry)
     if agent.get("agent_status") == "blocked":
         entry.setdefault("blocked_since", now)
     else:
         entry.pop("blocked_since", None)
+    exp = expires(agent)
+    if exp and on_it:
+        entry["ack"] = exp
+    elif entry.get("ack") != exp or not exp:
+        entry.pop("ack", None)
     return entry
+
+
+def blocked_unvisited(agent, entry):
+    return agent.get("agent_status") == "blocked" and entry.get("seen", 0) < entry.get("blocked_since", 0)
 
 
 def rank(agent, entry):
     status = agent.get("agent_status")
-    if status == "blocked" and entry.get("seen", 0) < entry.get("blocked_since", 0):
+    if blocked_unvisited(agent, entry):
         return "0"
     if status == "done":
         return "1"
@@ -104,7 +134,10 @@ def rank(agent, entry):
 
 def tokens_for(agent, entry, cur, is_current):
     seen = entry.get("seen")
+    exp = expires(agent)
     return {
+        "cycle_blocked": "0" if blocked_unvisited(agent, entry) else None,
+        "cycle_cache_ack": "1" if exp and entry.get("ack") == exp else "0",
         "cycle_rank": rank(agent, entry),
         "cycle_seen": stamp(seen) if seen else NEVER,
         cur: "1" if is_current else None,
@@ -115,15 +148,17 @@ def sync(focused=None, now=None):
     now = now or now_ms()
     cur = current_token()
     old = load_state()
+    # On a focus change, the pane you left: the one focused last.
+    left = previous_focus(old) if focused else None
     agents = call("agent.list", {}).get("agents", [])
     state = {}
     for agent in agents:
         pid = agent["pane_id"]
-        entry = update_pane(agent, old.get(pid, {}), now)
+        is_current = pid == focused if focused else bool(agent.get("focused"))
+        entry = update_pane(agent, old.get(pid, {}), now, on_it=is_current or pid == left)
         if pid == focused:
             entry["seen"] = now
         state[pid] = entry
-        is_current = pid == focused if focused else bool(agent.get("focused"))
         want = tokens_for(agent, entry, cur, is_current)
         have = agent.get("tokens") or {}
         if all(have.get(k) == v for k, v in want.items()):
@@ -132,6 +167,11 @@ def sync(focused=None, now=None):
     if state != old:
         save_state(state)
     call("agent.view.set", {"source": SOURCE, "label": "queue", "sort": sort_spec(cur)})
+
+
+def previous_focus(state):
+    seen = [(e.get("seen", 0), pid) for pid, e in state.items() if isinstance(e, dict) and e.get("seen")]
+    return max(seen)[1] if seen else None
 
 
 def focused_pane_from_event():

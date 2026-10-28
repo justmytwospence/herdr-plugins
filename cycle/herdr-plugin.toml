@@ -2,7 +2,7 @@ id = "agent-cycle"
 name = "Agent Cycle"
 version = "0.1.0"
 min_herdr_version = "0.9.3"
-description = "Order the Agents list so next_agent visits what needs you first, then everything else least recently visited first."
+description = "Order the Agents list so next_agent visits what needs you first (blocked, then sessions whose prompt cache expires soon, then done), then everything else least recently visited first."
 platforms = ["macos", "linux"]
 
 # `python3 -B` so no __pycache__ is written into the plugin checkout.

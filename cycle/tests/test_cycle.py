@@ -1,14 +1,22 @@
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from cycle import NEVER, current_token, rank, sort_spec, tokens_for, update_pane  # noqa: E402
+import cycle  # noqa: E402
+from cycle import EXPIRES, NEVER, current_token, previous_focus, rank, sort_spec, tokens_for, update_pane  # noqa: E402
+
+EXP = "1793219084732"
 
 
-def agent(status):
-    return {"pane_id": "w1:p1", "agent_status": status}
+def agent(status, expires=None):
+    a = {"pane_id": "w1:p1", "agent_status": status}
+    if expires:
+        a["tokens"] = {EXPIRES: expires}
+    return a
 
 
 class CycleTest(unittest.TestCase):
@@ -42,6 +50,87 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(sort_spec("cycle_cur_nuc")[0]["field"], {"token": "cycle_cur_nuc"})
         self.assertEqual(tokens_for(agent("idle"), {}, "cycle_cur_nuc", True)["cycle_cur_nuc"], "1")
         self.assertIsNone(tokens_for(agent("idle"), {}, "cycle_cur_nuc", False)["cycle_cur_nuc"])
+
+    def test_sort_order(self):
+        keys = [s["field"]["token"] for s in sort_spec("cycle_cur_nuc")]
+        self.assertEqual(keys, ["cycle_cur_nuc", "cycle_blocked", "cycle_cache_ack", EXPIRES, "cycle_rank", "cycle_seen"])
+        self.assertTrue(all(s["order"] == "asc" for s in sort_spec("c")))
+
+    def test_blocked_token_only_while_unvisited(self):
+        e = update_pane(agent("blocked"), {"seen": 5}, now=10)
+        self.assertEqual(tokens_for(agent("blocked"), e, "c", False)["cycle_blocked"], "0")
+        e["seen"] = 11
+        self.assertIsNone(tokens_for(agent("blocked"), e, "c", False)["cycle_blocked"])
+        self.assertIsNone(tokens_for(agent("done"), {}, "c", False)["cycle_blocked"])
+
+    def test_expiring_cache_is_acknowledged_by_being_on_it(self):
+        a = agent("idle", EXP)
+        e = update_pane(a, {}, now=10)
+        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "0")
+        e = update_pane(a, e, now=11, on_it=True)
+        self.assertEqual(e["ack"], EXP)
+        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "1")
+        e = update_pane(a, e, now=12)  # stays acknowledged after you leave
+        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "1")
+
+    def test_acknowledgement_resets_with_a_new_expiry_or_none(self):
+        e = update_pane(agent("idle", EXP), {}, now=10, on_it=True)
+        later = agent("idle", "1793219999999")
+        e2 = update_pane(later, e, now=11)
+        self.assertNotIn("ack", e2)
+        self.assertEqual(tokens_for(later, e2, "c", False)["cycle_cache_ack"], "0")
+        self.assertNotIn("ack", update_pane(agent("idle"), e, now=11))
+
+    def test_no_cache_guard_changes_nothing(self):
+        t = tokens_for(agent("idle"), update_pane(agent("idle"), {}, now=10, on_it=True), "c", True)
+        self.assertEqual(t["cycle_cache_ack"], "0")
+        self.assertEqual(t["cycle_rank"], "2")
+
+    def test_previous_focus_is_the_last_seen_pane(self):
+        self.assertEqual(previous_focus({"a": {"seen": 5}, "b": {"seen": 9}, "c": {}}), "b")
+        self.assertIsNone(previous_focus({"a": {}}))
+        self.assertIsNone(previous_focus({}))
+
+
+class SyncTest(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        patcher = mock.patch.dict(os.environ, {"HERDR_PLUGIN_STATE_DIR": d.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.agents = []
+        self.reports = {}
+
+    def fake_call(self, method, params):
+        if method == "agent.list":
+            return {"agents": self.agents}
+        if method == "pane.report_metadata":
+            self.reports[params["pane_id"]] = params["tokens"]
+        return {}
+
+    def sync(self, **kw):
+        with mock.patch.object(cycle, "call", self.fake_call):
+            cycle.sync(**kw)
+
+    def test_leaving_an_expiring_agent_acknowledges_it(self):
+        a = {"pane_id": "a", "agent_status": "idle", "tokens": {}}
+        b = {"pane_id": "b", "agent_status": "idle", "tokens": {}}
+        self.agents = [a, b]
+        self.sync(focused="a", now=100)
+        a["tokens"] = {EXPIRES: EXP}  # its cache enters the window while you are on it
+        self.sync(focused="b", now=200)
+        self.assertEqual(self.reports["a"]["cycle_cache_ack"], "1")
+        self.assertEqual(self.reports["b"]["cycle_cache_ack"], "0")
+
+    def test_an_expiring_agent_you_were_not_on_stays_up(self):
+        a = {"pane_id": "a", "agent_status": "idle", "tokens": {EXPIRES: EXP}}
+        b = {"pane_id": "b", "agent_status": "idle", "tokens": {}}
+        c = {"pane_id": "c", "agent_status": "idle", "tokens": {}}
+        self.agents = [a, b, c]
+        self.sync(focused="b", now=100)
+        self.sync(focused="c", now=200)
+        self.assertEqual(self.reports["a"]["cycle_cache_ack"], "0")
 
 
 if __name__ == "__main__":

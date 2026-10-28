@@ -5,8 +5,10 @@ agent, across machines, while visiting what needs you first:
 
 1. the agent you are on
 2. blocked agents you have not visited since they blocked
-3. finished agents Herdr still reports unseen (`done`)
-4. everyone else, least recently visited first
+3. agents whose prompt cache expires soon, soonest first, that you have not been on
+   since (needs pi-cache-guard; see below)
+4. finished agents Herdr still reports unseen (`done`)
+5. everyone else, least recently visited first
 
 `next_agent` from the top goes to the most urgent other agent; the agent you leave
 was visited last, so it goes to the end of the round-robin.
@@ -16,7 +18,22 @@ and its view sorts by that token only. Herdr orders the combined list with the
 selected machine's view, so the other machine's stale "current" flag is ignored. Visiting a blocked agent counts as handling it until it blocks
 again, so the cycle does not keep returning to it.
 
-It keeps hidden pane tokens (`cycle_rank`, `cycle_seen`, `cycle_cur_<host>`) and replaces
+## Expiring prompt caches
+
+With [pi-cache-guard](https://github.com/justmytwospence/pi-plugins/tree/main/packages/pi-cache-guard)
+(through pi-herdr), an idle pi session whose warm prompt cache is big enough to warn
+about (`warn.minTokens`) reports `cache_expires` in its last `herdr.expiringMinutes`
+(default 10): the expiry as epoch ms, dropped by Herdr when it passes. The view sorts
+on that token directly, so the agent moves up as soon as it appears, with no event
+needed. Being on the agent while it is reported (landing on it, or being on it when it
+appears and then leaving) takes it back out, until a new turn reports a new expiry.
+The window and size threshold are cache-guard's settings. Without cache-guard the
+token never appears and the order is as above without step 3.
+
+## Tokens
+
+It keeps hidden pane tokens (`cycle_blocked`, `cycle_cache_ack`, `cycle_rank`,
+`cycle_seen`, `cycle_cur_<host>`) and replaces
 `ui.agent_panel_sort` with `agent.view.set`, reapplied by its startup hook. Run it on
 every connected machine: each server records focus on its own panes.
 
