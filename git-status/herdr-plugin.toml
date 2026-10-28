@@ -6,19 +6,19 @@ description = "Changed paths, conflicts and synchronization on every space, incl
 platforms = ["macos", "linux"]
 
 [[startup]]
-command = ["python3", "git_status.py", "restore"]
+command = ["python3", "-B", "git_status.py", "restore"]
 
 [[actions]]
 id = "enable"
 title = "Enable working-tree status"
-command = ["python3", "git_status.py", "enable"]
+command = ["python3", "-B", "git_status.py", "enable"]
 
 [[actions]]
 id = "disable"
 title = "Disable working-tree status"
-command = ["python3", "git_status.py", "disable"]
+command = ["python3", "-B", "git_status.py", "disable"]
 
 [[actions]]
 id = "refresh"
 title = "Refresh working-tree status now"
-command = ["python3", "git_status.py", "once"]
+command = ["python3", "-B", "git_status.py", "once"]

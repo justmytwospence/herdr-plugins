@@ -8,10 +8,12 @@ import json
 import os
 from pathlib import Path
 import signal
-import socket
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import herdr_rpc  # noqa: E402
 
 INTERVAL = 5
 TTL_MS = 15000
@@ -22,17 +24,7 @@ DISABLE_TIMEOUT = 30
 
 
 def rpc(method, params=None):
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(5)
-        conn.connect(os.environ["HERDR_SOCKET_PATH"])
-        conn.sendall(json.dumps({"id": "git-status", "method": method,
-                                 "params": params or {}}).encode() + b"\n")
-        with conn.makefile("rb") as stream:
-            line = stream.readline(16 * 1024 * 1024)
-        response = json.loads(line)
-        if "error" in response:
-            raise RuntimeError(str(response["error"]))
-        return response["result"]
+    return herdr_rpc.call(method, params, timeout=5, max_bytes=16 * 1024 * 1024, request_id="git-status")
 
 
 def empty_tokens():

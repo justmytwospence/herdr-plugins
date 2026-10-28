@@ -18,53 +18,24 @@ Talks to the server through HERDR_SOCKET_PATH. Stdlib only.
 
 import json
 import os
-import socket
 import sys
-import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import herdr_rpc  # noqa: E402
 
 SOURCE = "plugin:hold-done"
-MAX_REPLY_BYTES = 8 * 1024 * 1024
 SORT = [
     {"field": {"token": "rank"}, "order": "asc"},
     {"field": "state_change_seq", "order": "desc"},
 ]
 
 
-class HerdrError(Exception):
-    pass
-
-
-def socket_path():
-    return os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+HerdrError = herdr_rpc.HerdrError
 
 
 def call(method, params, timeout=5.0):
-    request = {"id": "hold-done:%s:%d" % (method, time.time_ns()), "method": method, "params": params}
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        sock.connect(socket_path())
-        sock.sendall((json.dumps(request) + "\n").encode())
-        buf = b""
-        while b"\n" not in buf:
-            chunk = sock.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-            if len(buf) > MAX_REPLY_BYTES:
-                raise HerdrError("%s: reply too large" % method)
-    except OSError as e:
-        raise HerdrError("%s: %s" % (method, e))
-    finally:
-        sock.close()
-    line = buf.split(b"\n", 1)[0]
-    if not line:
-        raise HerdrError("%s: empty reply" % method)
-    reply = json.loads(line.decode())
-    if reply.get("error"):
-        err = reply["error"]
-        raise HerdrError("%s: %s: %s" % (method, err.get("code"), err.get("message")))
-    return reply.get("result") or {}
+    return herdr_rpc.call(method, params, timeout=timeout, request_id="hold-done")
 
 
 def state_file():
@@ -159,6 +130,6 @@ def main(argv):
 if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
-    except HerdrError as e:
+    except (HerdrError, OSError) as e:
         print("hold-done: %s" % e, file=sys.stderr)
         sys.exit(1)

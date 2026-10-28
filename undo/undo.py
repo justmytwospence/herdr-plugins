@@ -20,6 +20,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import herdr_rpc  # noqa: E402
+
 STACK_LIMIT = 20
 MAX_AGE = 24 * 60 * 60
 REFRESH_EVERY = 3.0        # seconds; pane renames emit no event
@@ -39,17 +42,7 @@ SUBSCRIPTIONS = [
 # --- socket API ---------------------------------------------------------------
 
 def rpc(method, params=None):
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(10)
-        conn.connect(os.environ["HERDR_SOCKET_PATH"])
-        conn.sendall(json.dumps({"id": "undo", "method": method,
-                                 "params": params or {}}).encode() + b"\n")
-        with conn.makefile("rb") as stream:
-            line = stream.readline(64 * 1024 * 1024)
-    response = json.loads(line)
-    if "error" in response:
-        raise RuntimeError(f"{method}: {response['error'].get('message', response['error'])}")
-    return response["result"]
+    return herdr_rpc.call(method, params, timeout=10, max_bytes=64 * 1024 * 1024, request_id="undo")
 
 
 def session_files():
