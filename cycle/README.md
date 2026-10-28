@@ -18,6 +18,24 @@ and its view sorts by that token only. Herdr orders the combined list with the
 selected machine's view, so the other machine's stale "current" flag is ignored. Visiting a blocked agent counts as handling it until it blocks
 again, so the cycle does not keep returning to it.
 
+## Skipping a repo's spaces
+
+The `next-block` action focuses the next agent in the same queue order that is outside
+the current agent's block: a repository's spaces (its main checkout and its linked
+worktrees) form one block, and any other space is a block of its own. Bind it next to
+`next_agent` to step over the rest of a repo's worktree spaces in one press:
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+enter"
+type = "plugin_action"
+command = "agent-cycle.next-block"
+```
+
+It sees the agents of the server it runs on (the machine you are viewing), not every
+connected machine as `next_agent` does. When every agent shares one block it goes to
+the next agent.
+
 ## Expiring prompt caches
 
 With [pi-cache-guard](https://github.com/justmytwospence/pi-plugins/tree/main/packages/pi-cache-guard)

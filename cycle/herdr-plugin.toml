@@ -27,3 +27,9 @@ id = "sync"
 title = "Re-sync the Agents cycle order"
 contexts = ["global"]
 command = ["python3", "-B", "cycle.py", "sync"]
+
+[[actions]]
+id = "next-block"
+title = "Next agent outside this repo's spaces"
+contexts = ["global"]
+command = ["python3", "-B", "cycle.py", "next-block"]

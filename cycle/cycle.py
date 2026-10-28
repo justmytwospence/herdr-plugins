@@ -21,7 +21,12 @@ Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
   cycle_cur_<host>  "1" on this server's focused pane (see current_token)
 
-Usage: cycle.py sync | focus
+next-block focuses the first agent in that same order that is outside the current
+agent's block: a repository's spaces (its main checkout and its linked worktrees),
+or a space of its own outside a repository. One press therefore steps over the rest
+of a repo's worktree spaces instead of visiting them one at a time.
+
+Usage: cycle.py sync | focus | next-block
 """
 
 import json
@@ -174,6 +179,46 @@ def previous_focus(state):
     return max(seen)[1] if seen else None
 
 
+def queue_key(agent, cur):
+    """The view's sort key for one agent: per token, absent after present, then by value."""
+    tokens = agent.get("tokens") or {}
+    key = []
+    for spec in sort_spec(cur):
+        value = tokens.get(spec["field"]["token"])
+        key.append((value is None, value or ""))
+    return key
+
+
+def block_of(workspace):
+    """A repository's spaces share one block; any other space is a block of its own."""
+    tree = (workspace or {}).get("worktree") or {}
+    return tree.get("repo_key") or (workspace or {}).get("workspace_id")
+
+
+def next_block_target(agents, workspaces, current, cur):
+    """The first agent in queue order outside the current agent's block (or, when every
+    agent shares that block, simply the next one); None when there is no other agent."""
+    blocks = {w["workspace_id"]: block_of(w) for w in workspaces}
+
+    def block(agent):
+        return blocks.get(agent.get("workspace_id"), agent.get("workspace_id"))
+
+    here = next((block(a) for a in agents if a["pane_id"] == current), None)
+    others = sorted((a for a in agents if a["pane_id"] != current), key=lambda a: queue_key(a, cur))
+    outside = [a for a in others if block(a) != here]
+    pick = (outside or others or [None])[0]
+    return pick["pane_id"] if pick else None
+
+
+def next_block():
+    agents = call("agent.list", {}).get("agents", [])
+    workspaces = call("workspace.list", {}).get("workspaces", [])
+    current = os.environ.get("HERDR_PANE_ID") or next((a["pane_id"] for a in agents if a.get("focused")), None)
+    target = next_block_target(agents, workspaces, current, current_token())
+    if target:
+        call("agent.focus", {"target": target})
+
+
 def focused_pane_from_event():
     try:
         data = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}")
@@ -191,8 +236,10 @@ def main(argv):
         sync()
     elif cmd == "focus":
         sync(focused=focused_pane_from_event())
+    elif cmd == "next-block":
+        next_block()
     else:
-        print("usage: cycle.py sync | focus", file=sys.stderr)
+        print("usage: cycle.py sync | focus | next-block", file=sys.stderr)
         return 2
     return 0
 

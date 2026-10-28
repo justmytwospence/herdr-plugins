@@ -92,6 +92,46 @@ class CycleTest(unittest.TestCase):
         self.assertIsNone(previous_focus({}))
 
 
+def ws(wid, repo=None):
+    w = {"workspace_id": wid}
+    if repo:
+        w["worktree"] = {"repo_key": repo}
+    return w
+
+
+def queued(pid, wid, seen, **tokens):
+    return {"pane_id": pid, "workspace_id": wid, "tokens": dict(tokens, cycle_seen=seen, cycle_rank=tokens.get("cycle_rank", "2"))}
+
+
+class NextBlockTest(unittest.TestCase):
+    WS = [ws("main", "/r/.git"), ws("wt1", "/r/.git"), ws("wt2", "/r/.git"), ws("solo")]
+
+    def test_skips_the_rest_of_the_repo(self):
+        agents = [
+            queued("m", "main", "0000000000005", cycle_cur_c="1"),
+            queued("w1", "wt1", "0000000000001"),
+            queued("w2", "wt2", "0000000000002"),
+            queued("s", "solo", "0000000000003"),
+        ]
+        self.assertEqual(cycle.next_block_target(agents, self.WS, "m", "cycle_cur_c"), "s")
+
+    def test_follows_queue_priority_outside_the_block(self):
+        agents = [
+            queued("s", "solo", "0000000000005"),
+            queued("w1", "wt1", "0000000000009", cycle_blocked="0"),
+            queued("w2", "wt2", "0000000000001"),
+        ]
+        self.assertEqual(cycle.next_block_target(agents, self.WS, "s", "c"), "w1")
+        agents.append(queued("x", "other", "0000000000002", cycle_cache_ack="0", cache_expires="1793219084732"))
+        agents[1]["tokens"].pop("cycle_blocked")
+        self.assertEqual(cycle.next_block_target(agents, self.WS, "s", "c"), "x")
+
+    def test_one_block_falls_back_to_the_next_agent(self):
+        agents = [queued("m", "main", "0000000000005"), queued("w1", "wt1", "0000000000001")]
+        self.assertEqual(cycle.next_block_target(agents, self.WS, "m", "c"), "w1")
+        self.assertIsNone(cycle.next_block_target(agents[:1], self.WS, "m", "c"))
+
+
 class SyncTest(unittest.TestCase):
     def setUp(self):
         d = tempfile.TemporaryDirectory()
