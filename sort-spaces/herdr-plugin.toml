@@ -1,0 +1,20 @@
+id = "sort-spaces"
+name = "Sort Spaces"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Sort spaces alphabetically by label."
+platforms = ["macos", "linux"]
+
+# `python3 -B` so no __pycache__ is written into the plugin checkout.
+
+[[actions]]
+id = "sort"
+title = "Sort spaces alphabetically"
+contexts = ["global"]
+command = ["python3", "-B", "sort_spaces.py"]
+
+[[actions]]
+id = "sort-reverse"
+title = "Sort spaces alphabetically (Z-A)"
+contexts = ["global"]
+command = ["python3", "-B", "sort_spaces.py", "--reverse"]
