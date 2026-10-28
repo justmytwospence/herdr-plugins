@@ -9,10 +9,10 @@ ordering with one keyed on pane tokens it maintains itself:
   held: "done" while an agent is in rank 1 (render it with a `$held` sidebar token)
 
 A hold starts when Herdr reports an unseen completion ("done") and survives Herdr
-marking it seen on focus. It ends when the agent starts new work, or with the
-`release` actions.
+marking it seen on focus. It ends when you move focus away from that pane, when the
+agent starts new work, or with the `release` actions.
 
-Usage: hold_done.py sync | release | release-all
+Usage: hold_done.py sync | focus | release | release-all
 Talks to the server through HERDR_SOCKET_PATH. Stdlib only.
 """
 
@@ -112,10 +112,41 @@ def sync(release=()):
     apply_view()
 
 
+def focus_file():
+    return os.path.join(os.path.dirname(state_file()), "focused")
+
+
+def focused_pane_from_event():
+    """The pane a pane.focused event names, from HERDR_PLUGIN_EVENT_JSON."""
+    try:
+        data = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}")
+    except ValueError:
+        data = {}
+    for node in (data, data.get("data") or {}, data.get("event") or {}, data.get("pane") or {}):
+        if isinstance(node, dict) and node.get("pane_id"):
+            return node["pane_id"]
+    return os.environ.get("HERDR_PANE_ID")
+
+
+def on_focus(pane):
+    """Release the pane you just left: a held agent drops when you move away, not on arrival."""
+    try:
+        with open(focus_file()) as f:
+            previous = f.read().strip()
+    except OSError:
+        previous = ""
+    if pane:
+        with open(focus_file(), "w") as f:
+            f.write(pane)
+    sync(release={previous} if previous and previous != pane else ())
+
+
 def main(argv):
     cmd = argv[0] if argv else "sync"
     if cmd == "sync":
         sync()
+    elif cmd == "focus":
+        on_focus(focused_pane_from_event())
     elif cmd == "release":
         pane = os.environ.get("HERDR_PANE_ID")
         if not pane:
@@ -124,7 +155,7 @@ def main(argv):
     elif cmd == "release-all":
         sync(release={a["pane_id"] for a in call("agent.list", {}).get("agents", [])})
     else:
-        print("usage: hold_done.py sync | release | release-all", file=sys.stderr)
+        print("usage: hold_done.py sync | focus | release | release-all", file=sys.stderr)
         return 2
     return 0
 

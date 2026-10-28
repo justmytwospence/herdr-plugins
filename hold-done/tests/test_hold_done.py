@@ -4,6 +4,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import tempfile  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+import hold_done  # noqa: E402
 from hold_done import desired_tokens, update_held  # noqa: E402
 
 
@@ -37,6 +41,28 @@ class DesiredTokensTest(unittest.TestCase):
         self.assertEqual(desired_tokens(agent("working"), False), ("2", None))
         self.assertEqual(desired_tokens(agent("idle", 7), False), ("3", None))
         self.assertEqual(desired_tokens(agent("unknown"), False), ("4", None))
+
+
+class FocusTest(unittest.TestCase):
+    def setUp(self):
+        env = {"HERDR_PLUGIN_STATE_DIR": tempfile.mkdtemp()}
+        self.env = patch.dict(os.environ, env)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.released = []
+        sync = patch.object(hold_done, "sync", side_effect=lambda release=(): self.released.append(set(release)))
+        sync.start()
+        self.addCleanup(sync.stop)
+
+    def test_event_pane(self):
+        with patch.dict(os.environ, {"HERDR_PLUGIN_EVENT_JSON": '{"event":"pane.focused","data":{"pane_id":"w1:p3"}}'}):
+            self.assertEqual(hold_done.focused_pane_from_event(), "w1:p3")
+
+    def test_arriving_releases_nothing_and_leaving_releases_the_previous_pane(self):
+        hold_done.on_focus("w1:p1")
+        hold_done.on_focus("w1:p1")
+        hold_done.on_focus("w2:p1")
+        self.assertEqual(self.released, [set(), set(), {"w1:p1"}])
 
 
 if __name__ == "__main__":

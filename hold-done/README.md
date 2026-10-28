@@ -19,8 +19,13 @@ It sets two pane tokens (`rank`, `held`) and replaces the Agents ordering with
 
 A hold starts only when Herdr reports an unseen completion (`done`), so finished
 work you had already seen before the plugin ran is never held. It survives Herdr
-marking the agent seen when you focus it, and ends when the agent starts new work
-or you release it.
+marking the agent seen when you focus it, and ends when you move focus away from
+it (so the row stays put while you read it and drops once you leave), when the agent
+starts new work, or when you release it.
+
+Focus changes are per server: leaving a NUC agent for a pane on another machine does
+not move the NUC server's focus, so that hold ends the next time you focus another
+pane on the NUC (or with `release`).
 
 ## Actions
 

@@ -18,6 +18,10 @@ command = ["python3", "-B", "hold_done.py", "sync"]
 on = "pane.agent_detected"
 command = ["python3", "-B", "hold_done.py", "sync"]
 
+[[events]]
+on = "pane.focused"
+command = ["python3", "-B", "hold_done.py", "focus"]
+
 [[actions]]
 id = "release"
 title = "Release the focused agent from done"
