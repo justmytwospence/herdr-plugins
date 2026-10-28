@@ -131,7 +131,7 @@ def sync(focused=None, now=None):
         call("pane.report_metadata", {"pane_id": pid, "source": SOURCE, "tokens": want})
     if state != old:
         save_state(state)
-    call("agent.view.set", {"source": SOURCE, "sort": sort_spec(cur)})
+    call("agent.view.set", {"source": SOURCE, "label": "queue", "sort": sort_spec(cur)})
 
 
 def focused_pane_from_event():
