@@ -8,9 +8,9 @@ ordering with one keyed on pane tokens it maintains itself:
   rank: 0 blocked, 1 finished and not released, 2 working, 3 idle, 4 unknown
   held: "done" while an agent is in rank 1 (render it with a `$held` sidebar token)
 
-An agent is held when its latest completion (`completion_seq`) is newer than the last
-one released for that pane. It releases itself when it starts new work (the next
-completion has a new sequence number), or explicitly with the `release` actions.
+A hold starts when Herdr reports an unseen completion ("done") and survives Herdr
+marking it seen on focus. It ends when the agent starts new work, or with the
+`release` actions.
 
 Usage: hold_done.py sync | release | release-all
 Talks to the server through HERDR_SOCKET_PATH. Stdlib only.
@@ -41,10 +41,10 @@ def call(method, params, timeout=5.0):
 def state_file():
     d = os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.expanduser("~/.local/state/herdr-hold-done")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "released.json")
+    return os.path.join(d, "held.json")
 
 
-def load_released():
+def load_held():
     try:
         with open(state_file()) as f:
             return {k: int(v) for k, v in json.load(f).items()}
@@ -52,24 +52,39 @@ def load_released():
         return {}
 
 
-def save_released(released):
+def save_held(held):
     tmp = state_file() + ".tmp"
     with open(tmp, "w") as f:
-        json.dump(released, f)
+        json.dump(held, f)
     os.replace(tmp, state_file())
 
 
-def desired_tokens(agent, released):
+def update_held(agent, held):
+    """Return the completion this pane holds after seeing `agent`, or None.
+
+    A hold starts only when Herdr reports an unseen completion ("done"), and
+    lasts, through Herdr marking it seen, until the agent starts another turn
+    or finishes a newer one (which needs its own unseen "done" to hold again).
+    """
+    status = agent.get("agent_status")
+    seq = agent.get("completion_seq")
+    if status == "done" and seq is not None:
+        return seq
+    if status == "idle" and seq is not None and held.get(agent["pane_id"]) == seq:
+        return seq
+    return None
+
+
+def desired_tokens(agent, is_held):
     """The (rank, held) tokens an agent should carry; held is None when not held."""
     status = agent.get("agent_status")
     if status == "blocked":
         return "0", None
     if status == "working":
         return "2", None
+    if is_held:
+        return "1", "done"
     if status in ("idle", "done"):
-        seq = agent.get("completion_seq")
-        if seq is not None and seq > released.get(agent["pane_id"], 0):
-            return "1", "done"
         return "3", None
     return "4", None
 
@@ -78,36 +93,23 @@ def apply_view():
     call("agent.view.set", {"source": SOURCE, "label": "hold done", "sort": SORT})
 
 
-def sync():
-    released = load_released()
+def sync(release=()):
+    old = load_held()
     agents = call("agent.list", {}).get("agents", [])
+    held = {}
     for agent in agents:
-        rank, held = desired_tokens(agent, released)
-        have = agent.get("tokens") or {}
-        if have.get("rank") == rank and have.get("held") == held:
-            continue
-        call("pane.report_metadata", {
-            "pane_id": agent["pane_id"],
-            "source": SOURCE,
-            "tokens": {"rank": rank, "held": held},
-        })
-    # Forget panes that no longer host an agent.
-    live = {a["pane_id"] for a in agents}
-    pruned = {k: v for k, v in released.items() if k in live}
-    if pruned != released:
-        save_released(pruned)
-    apply_view()
-
-
-def release(pane_ids):
-    agents = {a["pane_id"]: a for a in call("agent.list", {}).get("agents", [])}
-    released = load_released()
-    for pid in pane_ids:
-        seq = (agents.get(pid) or {}).get("completion_seq")
+        pid = agent["pane_id"]
+        seq = None if pid in release else update_held(agent, old)
         if seq is not None:
-            released[pid] = max(seq, released.get(pid, 0))
-    save_released(released)
-    sync()
+            held[pid] = seq
+        rank, mark = desired_tokens(agent, seq is not None)
+        have = agent.get("tokens") or {}
+        if have.get("rank") == rank and have.get("held") == mark:
+            continue
+        call("pane.report_metadata", {"pane_id": pid, "source": SOURCE, "tokens": {"rank": rank, "held": mark}})
+    if held != old:
+        save_held(held)
+    apply_view()
 
 
 def main(argv):
@@ -118,9 +120,9 @@ def main(argv):
         pane = os.environ.get("HERDR_PANE_ID")
         if not pane:
             raise HerdrError("release needs a focused pane (HERDR_PANE_ID)")
-        release([pane])
+        sync(release={pane})
     elif cmd == "release-all":
-        release([a["pane_id"] for a in call("agent.list", {}).get("agents", [])])
+        sync(release={a["pane_id"] for a in call("agent.list", {}).get("agents", [])})
     else:
         print("usage: hold_done.py sync | release | release-all", file=sys.stderr)
         return 2

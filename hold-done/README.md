@@ -17,9 +17,10 @@ It sets two pane tokens (`rank`, `held`) and replaces the Agents ordering with
 | 3 | idle |
 | 4 | unknown |
 
-An agent is held while its latest `completion_seq` is newer than the last one
-released for that pane. Starting new work gives its next completion a new number,
-so it holds again after each completion without any action.
+A hold starts only when Herdr reports an unseen completion (`done`), so finished
+work you had already seen before the plugin ran is never held. It survives Herdr
+marking the agent seen when you focus it, and ends when the agent starts new work
+or you release it.
 
 ## Actions
 
