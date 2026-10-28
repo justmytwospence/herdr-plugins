@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from cycle import NEVER, rank, tokens_for, update_pane  # noqa: E402
+from cycle import NEVER, current_token, rank, sort_spec, tokens_for, update_pane  # noqa: E402
 
 
 def agent(status):
@@ -30,9 +30,18 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(rank(agent(s), {}), "2")
 
     def test_seen_token_sorts_never_first(self):
-        self.assertEqual(tokens_for(agent("idle"), {})["cycle_seen"], NEVER)
-        self.assertEqual(tokens_for(agent("idle"), {"seen": 1793206714435})["cycle_seen"], "1793206714435")
+        self.assertEqual(tokens_for(agent("idle"), {}, "c", False)["cycle_seen"], NEVER)
+        self.assertEqual(tokens_for(agent("idle"), {"seen": 1793206714435}, "c", False)["cycle_seen"], "1793206714435")
         self.assertLess(NEVER, "1793206714435")
+
+
+    def test_current_flag_is_per_host_and_sorts_first(self):
+        self.assertEqual(current_token("spencer-mbp.local"), "cycle_cur_spencer-mbp")
+        self.assertEqual(current_token("nuc"), "cycle_cur_nuc")
+        self.assertLessEqual(len(current_token("x" * 80)), 32)
+        self.assertEqual(sort_spec("cycle_cur_nuc")[0]["field"], {"token": "cycle_cur_nuc"})
+        self.assertEqual(tokens_for(agent("idle"), {}, "cycle_cur_nuc", True)["cycle_cur_nuc"], "1")
+        self.assertIsNone(tokens_for(agent("idle"), {}, "cycle_cur_nuc", False)["cycle_cur_nuc"])
 
 
 if __name__ == "__main__":

@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Order the Agents list for cycling with next_agent.
 
-Order: blocked agents you have not visited since they blocked, then finished agents
-Herdr still reports unseen (`done`), then every other agent, least recently visited
-first. The agent you are on was visited last, so it sits at the bottom and
-next_agent wraps to the top: what needs you first, otherwise a round-robin.
+Order: the agent you are on, then blocked agents you have not visited since they
+blocked, then finished agents Herdr still reports unseen (`done`), then every other
+agent, least recently visited first. next_agent from the top therefore visits what
+needs you first, otherwise round-robins (the agent you leave was visited last).
 
 Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_rank  "0" blocked and unvisited, "1" done, "2" everything else
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
+  cycle_cur_<host>  "1" on this server's focused pane (see current_token)
 
 Usage: cycle.py sync | focus
 """
 
 import json
 import os
+import re
+import socket
 import sys
 import time
 from pathlib import Path
@@ -24,10 +27,26 @@ import herdr_rpc  # noqa: E402
 
 SOURCE = "plugin:agent-cycle"
 NEVER = "0" * 13
-SORT = [
-    {"field": {"token": "cycle_rank"}, "order": "asc"},
-    {"field": {"token": "cycle_seen"}, "order": "asc"},
-]
+
+
+def current_token(host=None):
+    """This server's "you are here" token name.
+
+    Each server knows only its own focused pane, so each flags it under its own
+    name and its view sorts by that name only. Herdr sorts the combined list with
+    the selected machine's view, so the other machine's stale flag is ignored.
+    """
+    host = (host or socket.gethostname()).split(".")[0]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", host)[:22] or "host"
+    return "cycle_cur_" + safe
+
+
+def sort_spec(cur):
+    return [
+        {"field": {"token": cur}, "order": "asc"},
+        {"field": {"token": "cycle_rank"}, "order": "asc"},
+        {"field": {"token": "cycle_seen"}, "order": "asc"},
+    ]
 
 
 def call(method, params):
@@ -83,13 +102,18 @@ def rank(agent, entry):
     return "2"
 
 
-def tokens_for(agent, entry):
+def tokens_for(agent, entry, cur, is_current):
     seen = entry.get("seen")
-    return {"cycle_rank": rank(agent, entry), "cycle_seen": stamp(seen) if seen else NEVER}
+    return {
+        "cycle_rank": rank(agent, entry),
+        "cycle_seen": stamp(seen) if seen else NEVER,
+        cur: "1" if is_current else None,
+    }
 
 
 def sync(focused=None, now=None):
     now = now or now_ms()
+    cur = current_token()
     old = load_state()
     agents = call("agent.list", {}).get("agents", [])
     state = {}
@@ -99,14 +123,15 @@ def sync(focused=None, now=None):
         if pid == focused:
             entry["seen"] = now
         state[pid] = entry
-        want = tokens_for(agent, entry)
+        is_current = pid == focused if focused else bool(agent.get("focused"))
+        want = tokens_for(agent, entry, cur, is_current)
         have = agent.get("tokens") or {}
         if all(have.get(k) == v for k, v in want.items()):
             continue
         call("pane.report_metadata", {"pane_id": pid, "source": SOURCE, "tokens": want})
     if state != old:
         save_state(state)
-    call("agent.view.set", {"source": SOURCE, "sort": SORT})
+    call("agent.view.set", {"source": SOURCE, "sort": sort_spec(cur)})
 
 
 def focused_pane_from_event():
