@@ -45,8 +45,8 @@ Show the held marker in the Agents rows with `{ token = "$held", fg = "#d7af5f" 
   startup hook reapplies it. Run the plugin on every machine you connect.
 - Herdr's own done/idle icon still follows its seen state; use the `$held` token
   to see which agents are held.
-- Replaces `ui.agent_panel_sort` while active; `herdr` clears it with
-  `agent view clear` semantics when the plugin is unlinked.
+- Replaces `ui.agent_panel_sort` while active. Herdr drops the view when the plugin
+  is disabled, unlinked or uninstalled.
 
-Requires Herdr 0.9.3+ and Python 3.9+ (stdlib only). Install by linking the
-checkout: `herdr plugin link ~/Projects/herdr-hold-done`.
+Requires Herdr 0.9.3+ and Python 3.9+ (stdlib only). Install:
+`herdr plugin install justmytwospence/herdr-plugins/hold-done --ref <commit> --yes`.

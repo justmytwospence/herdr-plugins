@@ -1,4 +1,4 @@
-# herdr-undo
+# undo
 
 A Python-standard-library Herdr plugin that reopens the last closed **pane, tab or
 space**: the same split tree and ratios, directories and labels, in the same place,
@@ -46,7 +46,7 @@ reopen, or on failure, it shows a toast and keeps the entry.
 ## Install
 
 ```sh
-herdr plugin install justmytwospence/herdr-undo --ref <commit> --yes
+herdr plugin install justmytwospence/herdr-plugins/undo --ref <commit> --yes
 ```
 
 Then bind the action, for example in `~/.config/herdr/config.toml`:

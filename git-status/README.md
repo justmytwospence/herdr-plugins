@@ -1,4 +1,4 @@
-# herdr-git-status
+# git-status
 
 A Python-standard-library Herdr plugin showing Git state in **every space**,
 independent of whether any agent is running. It reports grouped worktree children
@@ -32,10 +32,10 @@ clean result. Every refresh reports all ten tokens, actively clearing obsolete v
 Requires Python 3.9+, Git, and Herdr 0.7.5+ on macOS or Linux. No dependencies or
 build step. This plugin is separate from ezcorp-org/herdr-git-status.
 
-## Install locally
+## Install
 
 ```sh
-herdr plugin link ~/Projects/herdr-git-status
+herdr plugin install justmytwospence/herdr-plugins/git-status --ref <commit> --yes
 herdr plugin action invoke git-status.enable
 ```
 
