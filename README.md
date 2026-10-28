@@ -7,7 +7,6 @@ enabled and bound on its own; they only share this repository and a socket clien
 |---|---|---|
 | [git-status](git-status/) | `git-status` | Compact Git status (`* ↑N ↓N !`) on every space, including worktree children |
 | [undo](undo/) | `herdr-undo` | Reopen the last closed pane, tab or space with its layout, directories and labels, resuming agent sessions |
-| [hold-done](hold-done/) | `hold-done` | Keep finished agents in the Agents list's done slot until you release them, instead of when you look at them |
 | [sort-spaces](sort-spaces/) | `sort-spaces` | Sort spaces alphabetically |
 
 ## Install
