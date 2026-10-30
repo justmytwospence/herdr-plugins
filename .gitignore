@@ -1,2 +1,12 @@
 __pycache__/
 *.pyc
+
+# Shared policy is repository-owned, even with older global ignore rules.
+!/.pi/tool-gate.json
+!/.claude/settings.json
+!/.codex/config.toml
+!/.opencode/opencode.jsonc
+
+# Machine-local approvals stay local.
+/.pi/tool-gate.local.json
+/.claude/settings.local.json
