@@ -10,9 +10,10 @@ first, otherwise round-robins (the agent you leave was visited last).
 
 "Only waits" is pi-herdr's `wait` pane token on a working agent: pi-bg's bg_wait, or
 its wait for a job at the end of a turn. Such an agent needs nothing from you until
-the job ends, however long ago you visited it. Tokens change without a status or
-focus event, so `updated` (on pane.updated) re-syncs when a pane's wait started or
-ended; every other pane.updated exits without a call.
+the job ends, however long ago you visited it. Token changes invoke no plugin hook,
+so `start` (the startup hook and the sync action) also runs `watch`: one detached
+process per server that subscribes to pane.updated over the socket and re-syncs when
+a pane's wait started or ended, and exits when the server closes the connection.
 
 "Expires soon" is pi-cache-guard's `cache_expires` pane token (13-digit epoch ms of
 the expiry, present only in the last minutes of a big idle cache and dropped by
@@ -33,13 +34,16 @@ agent's block: a repository's spaces (its main checkout and its linked worktrees
 or a space of its own outside a repository. One press therefore steps over the rest
 of a repo's worktree spaces instead of visiting them one at a time.
 
-Usage: cycle.py sync | focus | updated | next-block
+Usage: cycle.py start | sync | focus | watch | next-block
 """
 
+import fcntl
 import json
 import os
 import re
+import signal
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -91,10 +95,14 @@ def stamp(ms):
     return "%013d" % ms
 
 
-def state_file():
+def state_dir():
     d = os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.expanduser("~/.local/state/herdr-agent-cycle")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "panes.json")
+    return d
+
+
+def state_file():
+    return os.path.join(state_dir(), "panes.json")
 
 
 def load_state():
@@ -256,6 +264,67 @@ def updated_needs_sync(data):
     return (ranked == "3") != waiting(pane)
 
 
+def watch_events(lines, resync):
+    """Re-sync for every pane.updated line that starts or ends a wait, until the
+    stream ends. The first line acknowledges the subscription."""
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and isinstance(event.get("data"), dict) and updated_needs_sync(event):
+            resync()
+
+
+def watch():
+    """Hold the lock, subscribe to pane.updated and re-sync on waits, until the
+    server closes the connection. A second watcher exits at once."""
+    lock = open(os.path.join(state_dir(), "watch.lock"), "a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    request = {"id": "agent-cycle:watch", "method": "events.subscribe",
+               "params": {"subscriptions": [{"type": "pane.updated"}]}}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(herdr_rpc.socket_path())
+        conn.sendall(json.dumps(request).encode() + b"\n")
+        with conn.makefile("rb") as stream:
+            def resync():
+                try:
+                    sync()
+                except (herdr_rpc.HerdrError, OSError) as e:
+                    print("agent-cycle watch: %s" % e, file=sys.stderr)
+            watch_events(stream, resync)
+
+
+def start_watcher():
+    """Replace this server's watcher with one running this checkout's code."""
+    path = os.path.join(state_dir(), "watch.lock")
+    try:
+        with open(path, "a+") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                pid = 0  # nobody holds it: the pid in it is stale, never signal it
+            except OSError:
+                f.seek(0)
+                pid = int(f.read().strip() or 0)
+        if pid > 0:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(20):
+                os.kill(pid, 0)
+                time.sleep(0.05)
+    except (OSError, ValueError):
+        pass
+    with open(os.devnull, "r+b") as null:
+        subprocess.Popen([sys.executable, "-B", os.path.abspath(__file__), "watch"],
+                         stdin=null, stdout=null, stderr=null, start_new_session=True, close_fds=True)
+
+
 def focused_pane_from_event():
     data = event_json()
     for node in (data.get("data") or {}, data):
@@ -266,17 +335,19 @@ def focused_pane_from_event():
 
 def main(argv):
     cmd = argv[0] if argv else "sync"
-    if cmd == "sync":
+    if cmd == "start":
+        sync()
+        start_watcher()
+    elif cmd == "sync":
         sync()
     elif cmd == "focus":
         sync(focused=focused_pane_from_event())
-    elif cmd == "updated":
-        if updated_needs_sync(event_json()):
-            sync()
+    elif cmd == "watch":
+        watch()
     elif cmd == "next-block":
         next_block()
     else:
-        print("usage: cycle.py sync | focus | updated | next-block", file=sys.stderr)
+        print("usage: cycle.py start | sync | focus | watch | next-block", file=sys.stderr)
         return 2
     return 0
 

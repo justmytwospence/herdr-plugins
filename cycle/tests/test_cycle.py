@@ -55,6 +55,15 @@ class CycleTest(unittest.TestCase):
         self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j"}, agent=None)))
         self.assertTrue(cycle.updated_needs_sync({}))
 
+    def test_watch_resyncs_only_for_waits_that_start_or_end(self):
+        def line(tokens):
+            return (cycle.json.dumps({"data": {"pane": {"pane_id": "w1:p1", "agent": "pi", "agent_status": "working", "tokens": tokens}}}) + "\n").encode()
+        calls = []
+        cycle.watch_events([b'{"id":"agent-cycle:watch","result":{"type":"subscription_started"}}\n', b"not json\n",
+                            line({WAIT: "j", "cycle_rank": "2"}), line({WAIT: "j", "cycle_rank": "3"}), line({"cycle_rank": "2"})],
+                           lambda: calls.append(1))
+        self.assertEqual(len(calls), 1)
+
     def test_seen_token_sorts_never_first(self):
         self.assertEqual(tokens_for(agent("idle"), {}, "c", False)["cycle_seen"], NEVER)
         self.assertEqual(tokens_for(agent("idle"), {"seen": 1793206714435}, "c", False)["cycle_seen"], "1793206714435")

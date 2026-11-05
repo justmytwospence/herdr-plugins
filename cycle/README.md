@@ -56,9 +56,12 @@ A working pi session whose turn only waits on a background job (pi-bg's `bg_wait
 its wait for a job when the agent ends its turn) carries pi-herdr's `wait` pane token.
 It needs nothing from you until the job ends, so it goes to the end of the queue
 however long ago you visited it, and comes back to its place when the wait ends.
-Token changes are not status changes, so the plugin also runs on `pane.updated`; an
-update that does not start or end a wait exits without calling the server. Without
-pi-herdr and pi-bg the token never appears and the order is as above without step 6.
+Token changes invoke no plugin hook, so the startup hook also starts a watcher: one
+detached `cycle.py watch` per server, subscribed to `pane.updated` over the socket,
+that re-syncs only when a pane's wait starts or ends and exits when the server closes
+the connection. After installing a new version, run the `sync` action (or restart
+Herdr) to replace the running watcher. Without pi-herdr and pi-bg the token never
+appears and the order is as above without step 6.
 
 ## Tokens
 
