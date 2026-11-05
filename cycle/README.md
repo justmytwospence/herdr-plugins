@@ -9,6 +9,8 @@ agent, across machines, while visiting what needs you first:
    since (needs pi-cache-guard; see below)
 4. finished agents Herdr still reports unseen (`done`)
 5. everyone else, least recently visited first
+6. agents whose turn only waits on background work (see below), least recently
+   visited first
 
 `next_agent` from the top goes to the most urgent other agent; the agent you leave
 was visited last, so it goes to the end of the round-robin.
@@ -47,6 +49,16 @@ needed. Being on the agent while it is reported (landing on it, or being on it w
 appears and then leaving) takes it back out, until a new turn reports a new expiry.
 The window and size threshold are cache-guard's settings. Without cache-guard the
 token never appears and the order is as above without step 3.
+
+## Agents waiting on background work
+
+A working pi session whose turn only waits on a background job (pi-bg's `bg_wait`, or
+its wait for a job when the agent ends its turn) carries pi-herdr's `wait` pane token.
+It needs nothing from you until the job ends, so it goes to the end of the queue
+however long ago you visited it, and comes back to its place when the wait ends.
+Token changes are not status changes, so the plugin also runs on `pane.updated`; an
+update that does not start or end a wait exits without calling the server. Without
+pi-herdr and pi-bg the token never appears and the order is as above without step 6.
 
 ## Tokens
 

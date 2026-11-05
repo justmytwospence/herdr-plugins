@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import cycle  # noqa: E402
-from cycle import EXPIRES, NEVER, current_token, previous_focus, rank, sort_spec, tokens_for, update_pane  # noqa: E402
+from cycle import EXPIRES, NEVER, WAIT, current_token, previous_focus, rank, sort_spec, tokens_for, update_pane  # noqa: E402
 
 EXP = "1793219084732"
 
@@ -36,6 +36,24 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(rank(agent("done"), {}), "1")
         for s in ("working", "idle", "unknown"):
             self.assertEqual(rank(agent(s), {}), "2")
+
+    def test_waiting_on_background_work_ranks_last(self):
+        w = {"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: "tz-grab"}}
+        self.assertEqual(rank(w, {}), "3")
+        self.assertEqual(rank(dict(w, agent_status="idle"), {}), "2")
+        self.assertEqual(rank(dict(w, agent_status="done"), {}), "1")
+        self.assertEqual(rank({"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: ""}}, {}), "2")
+
+    def test_updated_syncs_only_when_a_wait_starts_or_ends(self):
+        def ev(status, tokens, agent="pi"):
+            return {"data": {"pane": {"pane_id": "w1:p1", "agent": agent, "agent_status": status, "tokens": tokens}}}
+        self.assertTrue(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "2"})))
+        self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "3"})))
+        self.assertTrue(cycle.updated_needs_sync(ev("working", {"cycle_rank": "3"})))
+        self.assertTrue(cycle.updated_needs_sync(ev("idle", {WAIT: "j", "cycle_rank": "3"})))
+        self.assertFalse(cycle.updated_needs_sync(ev("idle", {"cycle_rank": "2"})))
+        self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j"}, agent=None)))
+        self.assertTrue(cycle.updated_needs_sync({}))
 
     def test_seen_token_sorts_never_first(self):
         self.assertEqual(tokens_for(agent("idle"), {}, "c", False)["cycle_seen"], NEVER)
@@ -171,6 +189,15 @@ class SyncTest(unittest.TestCase):
         self.sync(focused="b", now=100)
         self.sync(focused="c", now=200)
         self.assertEqual(self.reports["a"]["cycle_cache_ack"], "0")
+
+    def test_a_waiting_agent_goes_after_one_visited_later(self):
+        a = {"pane_id": "a", "agent_status": "working", "tokens": {WAIT: "tz-grab"}}
+        b = {"pane_id": "b", "agent_status": "idle", "tokens": {}}
+        self.agents = [a, b]
+        self.sync(focused="a", now=100)
+        self.sync(focused="b", now=200)
+        self.assertEqual(self.reports["a"]["cycle_rank"], "3")
+        self.assertEqual(self.reports["b"]["cycle_rank"], "2")
 
 
 if __name__ == "__main__":

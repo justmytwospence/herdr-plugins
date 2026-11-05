@@ -4,9 +4,15 @@
 Order: the agent you are on, then blocked agents you have not visited since they
 blocked, then agents whose prompt cache expires soon (soonest first) that you have
 not been on since, then finished agents Herdr still reports unseen (`done`), then
-every other agent, least recently visited first. next_agent from the top therefore
-visits what needs you first, otherwise round-robins (the agent you leave was
-visited last).
+every other agent, least recently visited first, and last the agents whose turn only
+waits on background work. next_agent from the top therefore visits what needs you
+first, otherwise round-robins (the agent you leave was visited last).
+
+"Only waits" is pi-herdr's `wait` pane token on a working agent: pi-bg's bg_wait, or
+its wait for a job at the end of a turn. Such an agent needs nothing from you until
+the job ends, however long ago you visited it. Tokens change without a status or
+focus event, so `updated` (on pane.updated) re-syncs when a pane's wait started or
+ended; every other pane.updated exits without a call.
 
 "Expires soon" is pi-cache-guard's `cache_expires` pane token (13-digit epoch ms of
 the expiry, present only in the last minutes of a big idle cache and dropped by
@@ -17,7 +23,8 @@ Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_blocked  "0" blocked and unvisited, else absent
   cycle_cache_ack  "1" once you were on the agent while its cache_expires was
                    present (until that value changes or goes), else "0"
-  cycle_rank  "0" blocked and unvisited, "1" done, "2" everything else
+  cycle_rank  "0" blocked and unvisited, "1" done, "2" everything else,
+              "3" working and only waiting (pi-herdr's `wait` token)
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
   cycle_cur_<host>  "1" on this server's focused pane (see current_token)
 
@@ -26,7 +33,7 @@ agent's block: a repository's spaces (its main checkout and its linked worktrees
 or a space of its own outside a repository. One press therefore steps over the rest
 of a repo's worktree spaces instead of visiting them one at a time.
 
-Usage: cycle.py sync | focus | next-block
+Usage: cycle.py sync | focus | updated | next-block
 """
 
 import json
@@ -44,6 +51,8 @@ SOURCE = "plugin:agent-cycle"
 NEVER = "0" * 13
 # pi-cache-guard's token: when an idle session's big prompt cache expires, near the end.
 EXPIRES = "cache_expires"
+# pi-herdr's token: what a working turn only waits on (a background job), while it waits.
+WAIT = "wait"
 
 
 def current_token(host=None):
@@ -128,12 +137,19 @@ def blocked_unvisited(agent, entry):
     return agent.get("agent_status") == "blocked" and entry.get("seen", 0) < entry.get("blocked_since", 0)
 
 
+def waiting(agent):
+    """Working, but the turn only waits on background work (pi-herdr's `wait` token)."""
+    return agent.get("agent_status") == "working" and bool((agent.get("tokens") or {}).get(WAIT))
+
+
 def rank(agent, entry):
     status = agent.get("agent_status")
     if blocked_unvisited(agent, entry):
         return "0"
     if status == "done":
         return "1"
+    if waiting(agent):
+        return "3"
     return "2"
 
 
@@ -219,11 +235,29 @@ def next_block():
         call("agent.focus", {"target": target})
 
 
-def focused_pane_from_event():
+def event_json():
     try:
         data = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}")
     except ValueError:
         data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def updated_needs_sync(data):
+    """Whether a pane.updated event changes the queue: the pane started or stopped only
+    waiting and its rank does not say so yet. Unreadable events re-sync."""
+    node = data.get("data") if isinstance(data.get("data"), dict) else data
+    pane = node.get("pane")
+    if not isinstance(pane, dict) or not pane.get("pane_id"):
+        return True
+    if not pane.get("agent"):
+        return False
+    ranked = (pane.get("tokens") or {}).get("cycle_rank")
+    return (ranked == "3") != waiting(pane)
+
+
+def focused_pane_from_event():
+    data = event_json()
     for node in (data.get("data") or {}, data):
         if isinstance(node, dict) and node.get("pane_id"):
             return node["pane_id"]
@@ -236,10 +270,13 @@ def main(argv):
         sync()
     elif cmd == "focus":
         sync(focused=focused_pane_from_event())
+    elif cmd == "updated":
+        if updated_needs_sync(event_json()):
+            sync()
     elif cmd == "next-block":
         next_block()
     else:
-        print("usage: cycle.py sync | focus | next-block", file=sys.stderr)
+        print("usage: cycle.py sync | focus | updated | next-block", file=sys.stderr)
         return 2
     return 0
 
