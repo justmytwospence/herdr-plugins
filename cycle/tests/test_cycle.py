@@ -208,6 +208,25 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.reports["a"]["cycle_rank"], "3")
         self.assertEqual(self.reports["b"]["cycle_rank"], "2")
 
+    def test_starting_a_turn_on_the_focused_pane_counts_as_a_visit(self):
+        a = {"pane_id": "a", "agent_status": "idle", "focused": True, "tokens": {}}
+        self.agents = [a]
+        self.sync(now=100)
+        self.assertEqual(self.reports["a"]["cycle_seen"], NEVER)
+        a["agent_status"] = "working"
+        self.sync(now=200)
+        self.assertEqual(self.reports["a"]["cycle_seen"], cycle.stamp(200))
+
+    def test_starting_a_turn_elsewhere_or_staying_busy_is_not_a_visit(self):
+        a = {"pane_id": "a", "agent_status": "idle", "focused": False, "tokens": {}}
+        b = {"pane_id": "b", "agent_status": "working", "focused": True, "tokens": {}}
+        self.agents = [a, b]
+        self.sync(now=100)
+        a["agent_status"] = "working"
+        self.sync(now=200)
+        self.assertEqual(self.reports["a"]["cycle_seen"], NEVER)
+        self.assertEqual(self.reports["b"]["cycle_seen"], NEVER)
+
 
 if __name__ == "__main__":
     unittest.main()

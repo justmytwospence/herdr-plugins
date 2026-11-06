@@ -8,6 +8,11 @@ every other agent, least recently visited first, and last the agents whose turn 
 waits on background work. next_agent from the top therefore visits what needs you
 first, otherwise round-robins (the agent you leave was visited last).
 
+A visit is a focus change on this server, or a turn starting (idle, done or blocked
+to working) on this server's focused pane: switching machines into a server whose
+focused pane is already the one you land on fires no pane.focused, so a server's
+only agent would otherwise never count as visited and stay at the front.
+
 "Only waits" is pi-herdr's `wait` pane token on a working agent: pi-bg's bg_wait, or
 its wait for a job at the end of a turn. Such an agent needs nothing from you until
 the job ends, however long ago you visited it. Token changes invoke no plugin hook,
@@ -184,9 +189,11 @@ def sync(focused=None, now=None):
     for agent in agents:
         pid = agent["pane_id"]
         is_current = pid == focused if focused else bool(agent.get("focused"))
-        entry = update_pane(agent, old.get(pid, {}), now, on_it=is_current or pid == left)
-        if pid == focused:
+        prev = old.get(pid, {})
+        entry = update_pane(agent, prev, now, on_it=is_current or pid == left)
+        if pid == focused or (is_current and started_turn(prev, agent)):
             entry["seen"] = now
+        entry["status"] = agent.get("agent_status")
         state[pid] = entry
         want = tokens_for(agent, entry, cur, is_current)
         have = agent.get("tokens") or {}
@@ -196,6 +203,16 @@ def sync(focused=None, now=None):
     if state != old:
         save_state(state)
     call("agent.view.set", {"source": SOURCE, "label": "queue", "sort": sort_spec(cur)})
+
+
+def started_turn(entry, agent):
+    """Whether the agent went from waiting on you (idle, done, blocked) to working.
+
+    On the server's focused pane this means you were on it, even when no focus event
+    said so: switching machines into a server whose focused pane is already the one
+    you land on (always so for a server with one agent) fires no pane.focused.
+    """
+    return entry.get("status") in ("idle", "done", "blocked") and agent.get("agent_status") == "working"
 
 
 def previous_focus(state):

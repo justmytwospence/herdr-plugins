@@ -20,6 +20,12 @@ and its view sorts by that token only. Herdr orders the combined list with the
 selected machine's view, so the other machine's stale "current" flag is ignored. Visiting a blocked agent counts as handling it until it blocks
 again, so the cycle does not keep returning to it.
 
+Switching machines into a server whose focused pane is already the one you land on
+(always so for a machine with a single agent) fires no focus event there, so a turn
+starting on a server's focused pane (idle, done or blocked to working) also counts as
+a visit. Without it that agent would never count as visited and would keep the front
+of the round-robin. Landing on it without starting a turn still goes unrecorded.
+
 ## Skipping a repo's spaces
 
 The `next-block` action focuses the next agent in the same queue order that is outside
