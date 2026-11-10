@@ -32,25 +32,26 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(e["blocked_since"], 3)
         self.assertNotIn("blocked_since", update_pane(agent("working"), e, now=12))
 
-    def test_done_then_everything_else(self):
+    def test_done_then_idle_then_working(self):
         self.assertEqual(rank(agent("done"), {}), "1")
-        for s in ("working", "idle", "unknown"):
+        for s in ("idle", "unknown"):
             self.assertEqual(rank(agent(s), {}), "2")
+        self.assertEqual(rank(agent("working"), {}), "3")
 
     def test_waiting_on_background_work_ranks_last(self):
         w = {"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: "tz-grab"}}
-        self.assertEqual(rank(w, {}), "3")
+        self.assertEqual(rank(w, {}), "4")
         self.assertEqual(rank(dict(w, agent_status="idle"), {}), "2")
         self.assertEqual(rank(dict(w, agent_status="done"), {}), "1")
-        self.assertEqual(rank({"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: ""}}, {}), "2")
+        self.assertEqual(rank({"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: ""}}, {}), "3")
 
     def test_updated_syncs_only_when_a_wait_starts_or_ends(self):
         def ev(status, tokens, agent="pi"):
             return {"data": {"pane": {"pane_id": "w1:p1", "agent": agent, "agent_status": status, "tokens": tokens}}}
-        self.assertTrue(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "2"})))
-        self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "3"})))
-        self.assertTrue(cycle.updated_needs_sync(ev("working", {"cycle_rank": "3"})))
-        self.assertTrue(cycle.updated_needs_sync(ev("idle", {WAIT: "j", "cycle_rank": "3"})))
+        self.assertTrue(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "3"})))
+        self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j", "cycle_rank": "4"})))
+        self.assertTrue(cycle.updated_needs_sync(ev("working", {"cycle_rank": "4"})))
+        self.assertTrue(cycle.updated_needs_sync(ev("idle", {WAIT: "j", "cycle_rank": "4"})))
         self.assertFalse(cycle.updated_needs_sync(ev("idle", {"cycle_rank": "2"})))
         self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j"}, agent=None)))
         self.assertTrue(cycle.updated_needs_sync({}))
@@ -60,7 +61,7 @@ class CycleTest(unittest.TestCase):
             return (cycle.json.dumps({"data": {"pane": {"pane_id": "w1:p1", "agent": "pi", "agent_status": "working", "tokens": tokens}}}) + "\n").encode()
         calls = []
         cycle.watch_events([b'{"id":"agent-cycle:watch","result":{"type":"subscription_started"}}\n', b"not json\n",
-                            line({WAIT: "j", "cycle_rank": "2"}), line({WAIT: "j", "cycle_rank": "3"}), line({"cycle_rank": "2"})],
+                            line({WAIT: "j", "cycle_rank": "3"}), line({WAIT: "j", "cycle_rank": "4"}), line({"cycle_rank": "3"})],
                            lambda: calls.append(1))
         self.assertEqual(len(calls), 1)
 
@@ -205,7 +206,7 @@ class SyncTest(unittest.TestCase):
         self.agents = [a, b]
         self.sync(focused="a", now=100)
         self.sync(focused="b", now=200)
-        self.assertEqual(self.reports["a"]["cycle_rank"], "3")
+        self.assertEqual(self.reports["a"]["cycle_rank"], "4")
         self.assertEqual(self.reports["b"]["cycle_rank"], "2")
 
     def test_starting_a_turn_on_the_focused_pane_counts_as_a_visit(self):
@@ -226,6 +227,29 @@ class SyncTest(unittest.TestCase):
         self.sync(now=200)
         self.assertEqual(self.reports["a"]["cycle_seen"], NEVER)
         self.assertEqual(self.reports["b"]["cycle_seen"], NEVER)
+
+    def test_a_working_agent_never_seen_goes_after_idle_ones(self):
+        # A server's only agent: landing on it from another machine fires no focus event.
+        a = {"pane_id": "a", "agent_status": "working", "focused": True, "tokens": {}}
+        b = {"pane_id": "b", "agent_status": "idle", "focused": False, "tokens": {}}
+        self.agents = [a, b]
+        self.sync(now=100)
+        self.assertEqual(self.reports["a"]["cycle_seen"], NEVER)
+        self.assertGreater(self.reports["a"]["cycle_rank"], self.reports["b"]["cycle_rank"])
+
+    def test_herdr_clearing_done_counts_as_a_visit(self):
+        a = {"pane_id": "a", "agent_status": "done", "focused": False, "tokens": {}}
+        self.agents = [a]
+        self.sync(now=100)
+        self.assertEqual(self.reports["a"]["cycle_seen"], NEVER)
+        a["agent_status"] = "idle"
+        self.sync(now=200)
+        self.assertEqual(self.reports["a"]["cycle_seen"], cycle.stamp(200))
+        a["agent_status"] = "working"
+        self.sync(now=300)
+        a["agent_status"] = "idle"  # working to idle: you need not have seen it
+        self.sync(now=400)
+        self.assertEqual(self.reports["a"]["cycle_seen"], cycle.stamp(200))
 
 
 if __name__ == "__main__":

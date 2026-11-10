@@ -8,9 +8,13 @@ agent, across machines, while visiting what needs you first:
 3. agents whose prompt cache expires soon, soonest first, that you have not been on
    since (needs pi-cache-guard; see below)
 4. finished agents Herdr still reports unseen (`done`)
-5. everyone else, least recently visited first
-6. agents whose turn only waits on background work (see below), least recently
+5. idle agents, least recently visited first
+6. working agents, least recently visited first
+7. agents whose turn only waits on background work (see below), least recently
    visited first
+
+A working agent needs nothing from you until it stops (it then comes back as done or
+blocked), so it never goes ahead of an agent waiting for input.
 
 `next_agent` from the top goes to the most urgent other agent; the agent you leave
 was visited last, so it goes to the end of the round-robin.
@@ -23,8 +27,10 @@ again, so the cycle does not keep returning to it.
 Switching machines into a server whose focused pane is already the one you land on
 (always so for a machine with a single agent) fires no focus event there, so a turn
 starting on a server's focused pane (idle, done or blocked to working) also counts as
-a visit. Without it that agent would never count as visited and would keep the front
-of the round-robin. Landing on it without starting a turn still goes unrecorded.
+a visit, and so does Herdr clearing an agent's `done` (it does so only once you have
+seen it). Without them that agent would never count as visited and would keep the
+front of the round-robin. Landing on it while it works, without starting a turn,
+still goes unrecorded: that is why working agents rank after idle ones.
 
 ## Skipping a repo's spaces
 
@@ -67,7 +73,7 @@ detached `cycle.py watch` per server, subscribed to `pane.updated` over the sock
 that re-syncs only when a pane's wait starts or ends and exits when the server closes
 the connection. After installing a new version, run the `sync` action (or restart
 Herdr) to replace the running watcher. Without pi-herdr and pi-bg the token never
-appears and the order is as above without step 6.
+appears and the order is as above without step 7.
 
 ## Tokens
 

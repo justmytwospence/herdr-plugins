@@ -4,14 +4,19 @@
 Order: the agent you are on, then blocked agents you have not visited since they
 blocked, then agents whose prompt cache expires soon (soonest first) that you have
 not been on since, then finished agents Herdr still reports unseen (`done`), then
-every other agent, least recently visited first, and last the agents whose turn only
-waits on background work. next_agent from the top therefore visits what needs you
-first, otherwise round-robins (the agent you leave was visited last).
+idle agents, then working ones (each least recently visited first), and last the
+agents whose turn only waits on background work. next_agent from the top therefore
+visits what needs you first, otherwise round-robins (the agent you leave was visited
+last). A working agent needs nothing from you until it stops, so it never goes ahead
+of one waiting for input.
 
 A visit is a focus change on this server, or a turn starting (idle, done or blocked
 to working) on this server's focused pane: switching machines into a server whose
 focused pane is already the one you land on fires no pane.focused, so a server's
-only agent would otherwise never count as visited and stay at the front.
+only agent would otherwise never count as visited and stay at the front. Herdr
+clearing `done` (done to idle) also counts: it does so only once you have seen the
+agent, on whichever pane. Landing on such an agent while it works still goes
+unrecorded, which is why working agents rank after idle ones.
 
 "Only waits" is pi-herdr's `wait` pane token on a working agent: pi-bg's bg_wait, or
 its wait for a job at the end of a turn. Such an agent needs nothing from you until
@@ -29,8 +34,8 @@ Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_blocked  "0" blocked and unvisited, else absent
   cycle_cache_ack  "1" once you were on the agent while its cache_expires was
                    present (until that value changes or goes), else "0"
-  cycle_rank  "0" blocked and unvisited, "1" done, "2" everything else,
-              "3" working and only waiting (pi-herdr's `wait` token)
+  cycle_rank  "0" blocked and unvisited, "1" done, "2" idle (and anything else),
+              "3" working, "4" working and only waiting (pi-herdr's `wait` token)
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
   cycle_cur_<host>  "1" on this server's focused pane (see current_token)
 
@@ -162,6 +167,8 @@ def rank(agent, entry):
     if status == "done":
         return "1"
     if waiting(agent):
+        return "4"
+    if status == "working":
         return "3"
     return "2"
 
@@ -191,7 +198,7 @@ def sync(focused=None, now=None):
         is_current = pid == focused if focused else bool(agent.get("focused"))
         prev = old.get(pid, {})
         entry = update_pane(agent, prev, now, on_it=is_current or pid == left)
-        if pid == focused or (is_current and started_turn(prev, agent)):
+        if pid == focused or (is_current and started_turn(prev, agent)) or cleared_done(prev, agent):
             entry["seen"] = now
         entry["status"] = agent.get("agent_status")
         state[pid] = entry
@@ -213,6 +220,12 @@ def started_turn(entry, agent):
     you land on (always so for a server with one agent) fires no pane.focused.
     """
     return entry.get("status") in ("idle", "done", "blocked") and agent.get("agent_status") == "working"
+
+
+def cleared_done(entry, agent):
+    """Whether Herdr cleared the agent's `done` (done to idle): it does so only once
+    you have seen it, so this is a visit even when no focus event said so."""
+    return entry.get("status") == "done" and agent.get("agent_status") == "idle"
 
 
 def previous_focus(state):
@@ -278,7 +291,7 @@ def updated_needs_sync(data):
     if not pane.get("agent"):
         return False
     ranked = (pane.get("tokens") or {}).get("cycle_rank")
-    return (ranked == "3") != waiting(pane)
+    return (ranked == "4") != waiting(pane)
 
 
 def watch_events(lines, resync):
