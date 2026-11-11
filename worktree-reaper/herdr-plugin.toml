@@ -1,0 +1,27 @@
+id = "worktree-reaper"
+name = "Worktree reaper"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Removes git worktrees whose branch has landed in origin's default branch (or a merged pull request), with their space and branch, once nothing works there"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["python3", "-B", "reaper.py", "restore"]
+
+[[actions]]
+id = "enable"
+title = "Enable the worktree reaper"
+contexts = ["global"]
+command = ["python3", "-B", "reaper.py", "enable"]
+
+[[actions]]
+id = "disable"
+title = "Disable the worktree reaper"
+contexts = ["global"]
+command = ["python3", "-B", "reaper.py", "disable"]
+
+[[actions]]
+id = "remove-landed"
+title = "Remove every landed, clean, idle worktree now"
+contexts = ["global"]
+command = ["python3", "-B", "reaper.py", "now"]

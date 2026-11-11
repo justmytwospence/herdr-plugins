@@ -9,6 +9,7 @@ enabled and bound on its own; they only share this repository and a socket clien
 | [undo](undo/) | `herdr-undo` | Reopen the last closed pane, tab or space with its layout, directories and labels, resuming agent sessions |
 | [cycle](cycle/) | `agent-cycle` | Agents list ordered for `next_agent`: blocked agents, then (with pi-cache-guard) sessions whose prompt cache expires soon, then unseen-finished agents, then the rest least recently visited first, so one key cycles everything while visiting what needs you first |
 | [sort-spaces](sort-spaces/) | `sort-spaces` | Sort spaces alphabetically |
+| [worktree-reaper](worktree-reaper/) | `worktree-reaper` | Removes worktrees whose branch landed in origin's default branch (or a merged pull request), with their space and branch, once nothing works there |
 
 ## Install
 
