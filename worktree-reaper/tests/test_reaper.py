@@ -312,6 +312,120 @@ class Cycle(unittest.TestCase):
         self.assertEqual(self.state["pending"], {})
 
 
+class Orphans(unittest.TestCase):
+    """Linked worktree spaces whose checkout is gone. No git needed: only paths and Herdr."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve() / "repo"
+        (self.root / ".worktrees" / "present").mkdir(parents=True)
+        self.gone = str(self.root / ".worktrees" / "gone")
+        self.present = str(self.root / ".worktrees" / "present")
+        self.panes = [
+            {"pane_id": "wG:p1", "workspace_id": "wG", "tab_id": "wG:t1", "foreground_cwd": self.gone},
+            {"pane_id": "wP:p1", "workspace_id": "wP", "tab_id": "wP:t1", "foreground_cwd": self.present},
+            {"pane_id": "wM:p1", "workspace_id": "wM", "tab_id": "wM:t1", "foreground_cwd": str(self.root)}]
+        self.agents = [{"workspace_id": "wG", "pane_id": "wG:p1", "agent_status": "idle"}]
+        self.calls = []
+        self.closed = []
+        self.state = {}
+
+    def call(self, method, params=None):
+        self.calls.append((method, params))
+        if method == "session.snapshot":
+            def space(wid, path, linked):
+                return {"workspace_id": wid, "focused": False, "label": "x",
+                        "worktree": {"checkout_path": path, "repo_root": str(self.root),
+                                     "repo_name": "repo", "is_linked_worktree": linked}}
+            spaces = [space(w, p, l) for w, p, l in (
+                ("wG", self.gone, True), ("wP", self.present, True), ("wM", str(self.root), False))
+                if w not in self.closed]
+            return {"snapshot": {"workspaces": spaces,
+                                 "panes": [p for p in self.panes if p["workspace_id"] not in self.closed]}}
+        if method == "agent.list":
+            return {"agents": self.agents}
+        if method == "workspace.close":
+            self.closed.append(params["workspace_id"])
+        if method == "pane.move":
+            return {"type": "pane_move", "move_result": {"closed_workspace_id": None}}
+        return {}
+
+    def run_cycle(self, at=0, **kwargs):
+        # No repository is a git repository here: the landed pass skips it.
+        return r.cycle(self.state, call=self.call, now=lambda: 1000.0 + at, gh=lambda *a: None, **kwargs)
+
+    def tokens(self):
+        return {p["workspace_id"]: p["tokens"][r.TOKEN] for m, p in self.calls
+                if m == "workspace.report_metadata"}
+
+    def test_path_missing_and_all_panes_idle_closes_after_the_grace(self):
+        self.assertEqual(self.run_cycle(0), [])
+        self.assertEqual(self.tokens()["wG"], "gone 4h")  # an idle agent: the long grace
+        self.assertEqual(self.run_cycle(r.GRACE_AGENT - 1), [])
+        self.assertEqual(self.closed, [])
+        lines = self.run_cycle(r.GRACE_AGENT + 1)
+        self.assertEqual(self.closed, ["wG"])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("repo/gone", lines[0])
+        self.assertEqual(self.state["orphans"], {})
+        self.assertTrue(any(m == "notification.show" for m, _ in self.calls))
+
+    def test_no_agent_uses_the_short_grace_and_force_skips_it(self):
+        self.agents = []
+        self.run_cycle(0)
+        self.assertEqual(self.tokens()["wG"], "gone 2m")
+        self.assertEqual(self.run_cycle(r.GRACE_EMPTY + 1)[0][:6], "Closed")
+        self.closed, self.state = [], {}
+        self.assertEqual(len(self.run_cycle(0, force=True)), 1)
+
+    def test_path_missing_with_a_working_agent_is_flagged_not_closed(self):
+        self.agents = [{"workspace_id": "wG", "pane_id": "wG:p1", "agent_status": "working"}]
+        self.assertEqual(self.run_cycle(0), [])
+        self.assertEqual(self.run_cycle(r.GRACE_AGENT + 1), [])
+        self.assertEqual(self.run_cycle(r.GRACE_AGENT + 2, force=True), [])
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.tokens()["wG"], r.ORPHAN_HELD)
+        # Once it goes idle, the grace starts then, not when the orphan was first seen.
+        self.agents[0]["agent_status"] = "idle"
+        self.assertEqual(self.run_cycle(r.GRACE_AGENT + 3), [])
+        self.assertEqual(self.tokens()["wG"], "gone 4h")
+
+    def test_a_pane_living_elsewhere_holds_the_space(self):
+        self.panes[0]["foreground_cwd"] = str(self.root)  # pi restarted from the main checkout
+        self.assertEqual(self.run_cycle(0, force=True), [])
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.tokens()["wG"], r.ORPHAN_HELD)
+
+    def test_a_present_path_is_untouched(self):
+        self.agents = []
+        self.run_cycle(0)
+        self.run_cycle(r.GRACE_AGENT + 1, force=True)
+        self.assertNotIn("wP", self.tokens())
+        self.assertNotIn("wM", self.tokens())
+        self.assertNotIn("wP", self.closed)
+        self.assertNotIn("wM", self.closed)
+        self.assertFalse(any(m == "pane.move" for m, _ in self.calls))
+
+    def test_the_token_clears_when_the_checkout_comes_back(self):
+        self.run_cycle(0)
+        Path(self.gone).mkdir()
+        self.run_cycle(60)
+        self.assertEqual(self.state["orphans"], {})
+        self.assertIsNone(self.calls[-1][1]["tokens"][r.TOKEN])
+
+    def test_adopt_moves_living_panes_to_the_main_space_and_closes_the_orphan(self):
+        self.panes[0]["foreground_cwd"] = str(self.root)
+        self.panes.append({"pane_id": "wG:p2", "workspace_id": "wG", "tab_id": "wG:t1",
+                           "foreground_cwd": self.gone})
+        lines = r.adopt_orphans(call=self.call)
+        moves = [p for m, p in self.calls if m == "pane.move"]
+        self.assertEqual(moves, [{"pane_id": "wG:p1", "destination": {
+            "type": "new_tab", "workspace_id": "wM", "label": "gone"}}])
+        self.assertEqual(self.closed, ["wG"])
+        self.assertEqual(len(lines), 1)
+
+
 class DaemonLifecycle(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -337,10 +451,12 @@ class DaemonLifecycle(unittest.TestCase):
             self.assertIsNone(r.locked_cycle(self.root, force=True, wait=0.2))
 
     def test_state_round_trips_and_survives_garbage(self):
-        r.save_state(self.root, {"fetched": {"/r": 1.0}, "pending": {"/r/w": {"sha": "a"}}, "gh_cache": {"k": 1}})
-        self.assertEqual(r.load_state(self.root), {"fetched": {"/r": 1.0}, "pending": {"/r/w": {"sha": "a"}}})
+        r.save_state(self.root, {"fetched": {"/r": 1.0}, "pending": {"/r/w": {"sha": "a"}},
+                                 "orphans": {"w1": {"path": "/x"}}, "gh_cache": {"k": 1}})
+        self.assertEqual(r.load_state(self.root), {"fetched": {"/r": 1.0}, "pending": {"/r/w": {"sha": "a"}},
+                                                   "orphans": {"w1": {"path": "/x"}}})
         (self.root / "state.json").write_text("{nope")
-        self.assertEqual(r.load_state(self.root), {"fetched": {}, "pending": {}})
+        self.assertEqual(r.load_state(self.root), {"fetched": {}, "pending": {}, "orphans": {}})
 
     def test_config_overrides_the_grace_periods(self):
         with patch.dict(os.environ, {"HERDR_PLUGIN_CONFIG_DIR": str(self.root)}):

@@ -2,7 +2,7 @@ id = "worktree-reaper"
 name = "Worktree reaper"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "Removes git worktrees whose branch has landed in origin's default branch (or a merged pull request), with their space and branch, once nothing works there"
+description = "Removes git worktrees whose branch has landed in origin's default branch (or a merged pull request), with their space and branch, once nothing works there; closes spaces whose checkout was removed elsewhere"
 platforms = ["macos", "linux"]
 
 [[startup]]
@@ -22,6 +22,12 @@ command = ["python3", "-B", "reaper.py", "disable"]
 
 [[actions]]
 id = "remove-landed"
-title = "Remove every landed, clean, idle worktree now"
+title = "Remove every landed, clean, idle worktree (and orphaned space) now"
 contexts = ["global"]
 command = ["python3", "-B", "reaper.py", "now"]
+
+[[actions]]
+id = "adopt-orphans"
+title = "Move panes out of orphaned worktree spaces into the main space and close them"
+contexts = ["global"]
+command = ["python3", "-B", "reaper.py", "adopt"]

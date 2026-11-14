@@ -28,6 +28,24 @@ checkout), else `git worktree remove`, then `git branch -D` (squash merges are n
 It never forces and never trusts a repository for you; a refusal is logged and skipped. One
 notification per removal.
 
+## Orphaned spaces
+
+A checkout removed outside this plugin (`git worktree remove`, `rm -rf`) leaves its linked
+worktree space behind, and Git status tokens then show `!` for good. A linked worktree space
+whose checkout path no longer exists is orphaned:
+
+- When none of its panes holds a `working` or `blocked` agent or has a foreground directory
+  that still exists, its space is closed (`workspace.close`) after the same grace as a landed
+  worktree (2 minutes, or 4 hours with an idle agent in it), unless it is focused. One
+  notification per close.
+- Otherwise something still lives there (an agent at work, or a session restarted from another
+  directory), so it is only flagged `orphaned` and left to you; the grace starts once that
+  ends. `worktree-reaper.adopt-orphans` moves those panes into a new tab of the repository's
+  main space (a new space when none is open) and closes the orphan.
+
+A space whose path exists is never touched, and no branch is deleted: the checkout is already
+gone, so whoever removed it decides about the branch.
+
 Repositories are discovered from the spaces open in Herdr; a repository with no open space is
 not scanned. The pass runs every 60 seconds and fetches each repository at most every 5
 minutes.
@@ -35,8 +53,8 @@ minutes.
 ## Space token
 
 `landed` is set on a pending worktree's space, for example `✓ dev · 3h` (`PR` when a merged pull
-request was the evidence) counting down to its removal. Add it to a sidebar row in Herdr's
-config:
+request was the evidence) counting down to its removal. An orphaned space shows `gone 2m` counting down to its close,
+or `orphaned` when it is kept. Add it to a sidebar row in Herdr's config:
 
 ```toml
 { token = "$landed", dim = true },
@@ -48,7 +66,8 @@ config:
 | --- | --- |
 | `worktree-reaper.enable` | Start the background pass (a startup hook restores it) |
 | `worktree-reaper.disable` | Stop it and clear the tokens |
-| `worktree-reaper.remove-landed` | Run one pass now, ignoring the grace period (still never a busy or dirty one), and print what it removed |
+| `worktree-reaper.remove-landed` | Run one pass now, ignoring the grace period (still never a busy or dirty one), and print what it removed; also closes orphaned spaces nothing lives in |
+| `worktree-reaper.adopt-orphans` | Move the living panes of every orphaned space into the repository's main space, then close the orphan |
 
 ## Configuration
 
@@ -73,5 +92,5 @@ Requires Python 3.9+, Git and Herdr 0.9.5+ on macOS or Linux; `gh` is optional.
 ## Tests
 
 ```sh
-cd worktree-reaper && python3 -B -m unittest discover -s tests
+cd worktree-reaper && GIT_CONFIG_GLOBAL=/dev/null python3 -B -m unittest discover -s tests
 ```

@@ -5,6 +5,10 @@ Landed: the branch tip is contained in origin's default branch (after a fetch), 
 pull request's head is the tip (squash merges, through `gh`). A worktree is removed only when it
 is clean, its space is not focused and has no working or blocked agent, and it stayed landed
 through a grace period (long when an agent is still in its space).
+
+Orphaned: a linked worktree space whose checkout no longer exists (removed outside this plugin).
+Its space is closed after the same grace period when nothing in it still lives elsewhere: no
+working or blocked agent, no pane whose foreground directory exists. Otherwise it is only flagged.
 """
 import argparse
 import fcntl
@@ -156,6 +160,71 @@ def token_text(label, seconds):
     return f"\u2713 {label} \u00b7 {remaining(seconds)}"
 
 
+ORPHAN_HELD = "orphaned"
+
+
+def gone_text(seconds):
+    return f"gone {remaining(seconds)}"
+
+
+def orphan_spaces(snapshot):
+    """Linked worktree spaces whose checkout path no longer exists: [(workspace, path)]."""
+    found = []
+    for workspace in snapshot.get("workspaces", []):
+        tree = workspace.get("worktree") or {}
+        path = tree.get("checkout_path")
+        if tree.get("is_linked_worktree") and path and not os.path.lexists(path):
+            found.append((workspace, path))
+    return found
+
+
+def keeper_panes(space, snapshot, agents):
+    """Panes of an orphaned space that still live: a working or blocked agent, or a foreground
+    directory that exists (the checkout is gone, so it is somewhere else)."""
+    status = {a.get("pane_id"): a.get("agent_status") for a in agents}
+    keep = []
+    for pane in snapshot.get("panes", []):
+        if pane.get("workspace_id") != space:
+            continue
+        busy = status.get(pane.get("pane_id"), pane.get("agent_status")) in ("working", "blocked")
+        where = pane.get("foreground_cwd")
+        if busy or (where and os.path.isdir(where)):
+            keep.append(pane)
+    return keep
+
+
+def main_space(snapshot, repo_root):
+    """The repository's main-checkout space, or None."""
+    for workspace in snapshot.get("workspaces", []):
+        tree = workspace.get("worktree") or {}
+        if (not tree.get("is_linked_worktree") and tree.get("checkout_path")
+                and real(tree["checkout_path"]) == real(repo_root)):
+            return workspace["workspace_id"]
+    return None
+
+
+def space_name(workspace):
+    tree = workspace.get("worktree") or {}
+    repo = tree.get("repo_name") or os.path.basename(tree.get("repo_root") or "") or "?"
+    return f"{repo}/{os.path.basename(tree.get('checkout_path') or '') or workspace.get('label', '?')}"
+
+
+def close_orphan(workspace, path, call):
+    """Close an orphaned space (never deletes a branch: the checkout is already gone)."""
+    name = space_name(workspace)
+    try:
+        call("workspace.close", {"workspace_id": workspace["workspace_id"]})
+    except (herdr_rpc.HerdrError, OSError) as error:
+        print(f"{name}: herdr could not close its space: {error}", file=sys.stderr, flush=True)
+        return None
+    try:
+        call("notification.show", {"title": "Orphaned space closed",
+                                   "body": f"{name}: its checkout is gone"})
+    except (herdr_rpc.HerdrError, OSError):
+        pass
+    return f"Closed the space of {name}: {path} no longer exists"
+
+
 def load_config():
     folder = os.environ.get("HERDR_PLUGIN_CONFIG_DIR")
     if not folder:
@@ -197,6 +266,13 @@ def remove(root, worktree, space, base, call, run):
 
 
 def report(call, space, text):
+    if text is None:
+        try:
+            call("workspace.report_metadata", {"workspace_id": space, "source": SOURCE,
+                                               "tokens": {TOKEN: None}, "ttl_ms": TTL_MS})
+        except (herdr_rpc.HerdrError, OSError):
+            pass  # the space is gone, or the TTL clears the token
+        return
     try:
         call("workspace.report_metadata", {"workspace_id": space, "source": SOURCE,
                                            "tokens": {TOKEN: text}, "ttl_ms": TTL_MS})
@@ -207,8 +283,9 @@ def report(call, space, text):
 def cycle(state, *, call=rpc, run=git, now=time.time, force=False, config=None, gh=gh_merged_heads):
     """One pass over every repository that has an open space. Returns the removal lines.
 
-    `state` (JSON-serialisable, kept by the caller) holds `fetched` ({root: time}) and `pending`
-    ({path: {sha, since, base, space}}); `gh_cache` is in-memory only.
+    `state` (JSON-serialisable, kept by the caller) holds `fetched` ({root: time}), `pending`
+    ({path: {sha, since, base, space}}) and `orphans` ({space: {path, since}}); `gh_cache` is
+    in-memory only.
     """
     config = config or {}
     grace_empty = int(config.get("grace_empty_s", GRACE_EMPTY))
@@ -229,7 +306,7 @@ def cycle(state, *, call=rpc, run=git, now=time.time, force=False, config=None, 
         if tree.get("repo_root"):
             roots.add(real(tree["repo_root"]))
 
-    lines, still = [], set()
+    lines, still, gone = [], set(), set()
     for root in sorted(roots):
         if force or moment - fetched.get(root, 0) >= FETCH_EVERY:
             fetch = run(["fetch", "--prune", "--quiet", "origin"], root)
@@ -272,17 +349,89 @@ def cycle(state, *, call=rpc, run=git, now=time.time, force=False, config=None, 
             line = remove(root, worktree, space, base, call, run)
             if line:
                 lines.append(line)
+                gone.add(space)
                 pending.pop(path, None)
                 still.discard(path)
 
     for path in [p for p in pending if p not in still]:
         entry = pending.pop(path)
         if entry.get("space"):
+            report(call, entry["space"], None)
+
+    lines.extend(reap_orphans(state, snapshot, agents, call, moment, force, grace_empty, grace_agent,
+                              skip=gone))
+    return lines
+
+
+def reap_orphans(state, snapshot, agents, call, moment, force, grace_empty, grace_agent, skip=()):
+    """Count down and close orphaned spaces; flag the ones something still lives in. `skip`:
+    spaces this pass already removed with their worktree."""
+    orphans = state.setdefault("orphans", {})
+    occupied = {a.get("workspace_id") for a in agents}
+    lines, seen = [], set()
+    for workspace, path in orphan_spaces(snapshot):
+        space = workspace["workspace_id"]
+        if space in skip:
+            continue
+        seen.add(space)
+        entry = orphans.get(space)
+        if not entry or entry.get("path") != path:
+            entry = orphans[space] = {"path": path, "since": moment}
+        if keeper_panes(space, snapshot, agents):
+            entry["since"] = moment  # the grace starts once nothing lives here any more
+            report(call, space, ORPHAN_HELD)
+            continue
+        grace = grace_agent if space in occupied else grace_empty
+        left = grace - (moment - entry["since"])
+        report(call, space, gone_text(left))
+        if (left > 0 or workspace.get("focused")) and not force:
+            continue
+        line = close_orphan(workspace, path, call)
+        if line:
+            lines.append(line)
+            orphans.pop(space, None)
+            seen.discard(space)
+    for space in [s for s in orphans if s not in seen]:
+        orphans.pop(space)
+        report(call, space, None)
+    return lines
+
+
+def adopt_orphans(*, call=rpc):
+    """Move the living panes of every orphaned space into its repository's main space (a new
+    space when none is open), then close the orphan. Returns the report lines."""
+    snapshot = call("session.snapshot")["snapshot"]
+    agents = call("agent.list").get("agents", [])
+    lines = []
+    for workspace, path in orphan_spaces(snapshot):
+        space, name = workspace["workspace_id"], space_name(workspace)
+        root = (workspace.get("worktree") or {}).get("repo_root") or ""
+        target = main_space(snapshot, root) if root else None
+        moved, closed = 0, False
+        for pane in keeper_panes(space, snapshot, agents):
+            if target:
+                destination = {"type": "new_tab", "workspace_id": target,
+                               "label": os.path.basename(path)}
+            else:
+                destination = {"type": "new_workspace",
+                               "label": (workspace.get("worktree") or {}).get("repo_name")}
             try:
-                call("workspace.report_metadata", {"workspace_id": entry["space"], "source": SOURCE,
-                                                   "tokens": {TOKEN: None}, "ttl_ms": TTL_MS})
-            except (herdr_rpc.HerdrError, OSError):
-                pass  # the space is gone, or the TTL clears the token
+                result = call("pane.move", {"pane_id": pane["pane_id"], "destination": destination})
+            except (herdr_rpc.HerdrError, OSError) as error:
+                print(f"{name}: could not move {pane['pane_id']}: {error}", file=sys.stderr, flush=True)
+                continue
+            moved += 1
+            outcome = result.get("move_result") or {}
+            created = outcome.get("created_workspace") or {}
+            if not target and created.get("workspace_id"):
+                target = created["workspace_id"]
+            if outcome.get("closed_workspace_id") == space:
+                closed = True  # moving its last pane closed it
+        if not closed:
+            if close_orphan(workspace, path, call) is None:
+                lines.append(f"Moved {moved} pane(s) out of {name}, but could not close its space")
+                continue
+        lines.append(f"Moved {moved} pane(s) out of {name} and closed its space ({path} is gone)")
     return lines
 
 
@@ -299,11 +448,11 @@ def load_state(root):
         data = json.loads((root / "state.json").read_text())
     except (OSError, ValueError):
         data = {}
-    return {"fetched": data.get("fetched", {}), "pending": data.get("pending", {})}
+    return {key: data.get(key, {}) for key in ("fetched", "pending", "orphans")}
 
 
 def save_state(root, state):
-    stored = {"fetched": state.get("fetched", {}), "pending": state.get("pending", {})}
+    stored = {key: state.get(key, {}) for key in ("fetched", "pending", "orphans")}
     temp = root / "state.json.tmp"
     temp.write_text(json.dumps(stored))
     os.replace(temp, root / "state.json")
@@ -381,20 +530,16 @@ def wait_for_daemon(root):
 
 def clear_tokens(root):
     state = load_state(root)
-    for entry in state.get("pending", {}).values():
-        if entry.get("space"):
-            try:
-                rpc("workspace.report_metadata", {"workspace_id": entry["space"], "source": SOURCE,
-                                                  "tokens": {TOKEN: None}, "ttl_ms": TTL_MS})
-            except (herdr_rpc.HerdrError, OSError):
-                pass
-    state["pending"] = {}
+    spaces = [e.get("space") for e in state.get("pending", {}).values()] + list(state.get("orphans", {}))
+    for space in filter(None, spaces):
+        report(rpc, space, None)
+    state["pending"], state["orphans"] = {}, {}
     save_state(root, state)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["enable", "restore", "disable", "now", "daemon"])
+    parser.add_argument("mode", choices=["enable", "restore", "disable", "now", "adopt", "daemon"])
     args = parser.parse_args()
     root = session_files()
     disabled = root / "disabled"
@@ -403,6 +548,9 @@ def main():
         if lines is None:
             sys.exit("Another pass is still running; try again in a moment.")
         print("\n".join(lines) if lines else "Nothing to remove.")
+    elif args.mode == "adopt":
+        lines = adopt_orphans()
+        print("\n".join(lines) if lines else "No orphaned spaces.")
     elif args.mode == "disable":
         disabled.touch()
         wait_for_daemon(root)
