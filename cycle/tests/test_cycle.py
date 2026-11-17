@@ -57,6 +57,15 @@ class CycleTest(unittest.TestCase):
         self.assertFalse(cycle.updated_needs_sync(ev("working", {WAIT: "j"}, agent=None)))
         self.assertTrue(cycle.updated_needs_sync({}))
 
+    def test_updated_syncs_when_an_expiring_cache_appears_changes_or_goes(self):
+        def ev(tokens):
+            return {"data": {"pane": {"pane_id": "w1:p1", "agent": "pi", "agent_status": "idle", "tokens": dict(tokens, cycle_rank="2")}}}
+        self.assertTrue(cycle.updated_needs_sync(ev({EXPIRES: EXP})))
+        self.assertFalse(cycle.updated_needs_sync(ev({EXPIRES: EXP, "cycle_expires": EXP})))
+        self.assertFalse(cycle.updated_needs_sync(ev({EXPIRES: EXP, "cycle_cache_ack": EXP})))
+        self.assertTrue(cycle.updated_needs_sync(ev({"cycle_expires": EXP})))
+        self.assertTrue(cycle.updated_needs_sync(ev({EXPIRES: "1793219999999", "cycle_expires": EXP})))
+
     def test_watch_resyncs_only_for_waits_that_start_or_end(self):
         def line(tokens):
             return (cycle.json.dumps({"data": {"pane": {"pane_id": "w1:p1", "agent": "pi", "agent_status": "working", "tokens": tokens}}}) + "\n").encode()
@@ -82,7 +91,7 @@ class CycleTest(unittest.TestCase):
 
     def test_sort_order(self):
         keys = [s["field"]["token"] for s in sort_spec("cycle_cur_nuc")]
-        self.assertEqual(keys, ["cycle_cur_nuc", "cycle_blocked", "cycle_cache_ack", EXPIRES, "cycle_rank", "cycle_seen"])
+        self.assertEqual(keys, ["cycle_cur_nuc", "cycle_blocked", "cycle_expires", "cycle_rank", "cycle_seen"])
         self.assertTrue(all(s["order"] == "asc" for s in sort_spec("c")))
 
     def test_blocked_token_only_while_unvisited(self):
@@ -95,24 +104,33 @@ class CycleTest(unittest.TestCase):
     def test_expiring_cache_is_acknowledged_by_being_on_it(self):
         a = agent("idle", EXP)
         e = update_pane(a, {}, now=10)
-        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "0")
+        t = tokens_for(a, e, "c", False)
+        self.assertIsNone(t["cycle_cache_ack"])
+        self.assertEqual(t["cycle_expires"], EXP)
         e = update_pane(a, e, now=11, on_it=True)
         self.assertEqual(e["ack"], EXP)
-        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "1")
+        t = tokens_for(a, e, "c", False)
+        self.assertEqual(t["cycle_cache_ack"], EXP)
+        self.assertIsNone(t["cycle_expires"])
         e = update_pane(a, e, now=12)  # stays acknowledged after you leave
-        self.assertEqual(tokens_for(a, e, "c", False)["cycle_cache_ack"], "1")
+        t = tokens_for(a, e, "c", False)
+        self.assertEqual(t["cycle_cache_ack"], EXP)
+        self.assertIsNone(t["cycle_expires"])
 
     def test_acknowledgement_resets_with_a_new_expiry_or_none(self):
         e = update_pane(agent("idle", EXP), {}, now=10, on_it=True)
         later = agent("idle", "1793219999999")
         e2 = update_pane(later, e, now=11)
         self.assertNotIn("ack", e2)
-        self.assertEqual(tokens_for(later, e2, "c", False)["cycle_cache_ack"], "0")
+        t = tokens_for(later, e2, "c", False)
+        self.assertIsNone(t["cycle_cache_ack"])
+        self.assertEqual(t["cycle_expires"], "1793219999999")
         self.assertNotIn("ack", update_pane(agent("idle"), e, now=11))
 
     def test_no_cache_guard_changes_nothing(self):
         t = tokens_for(agent("idle"), update_pane(agent("idle"), {}, now=10, on_it=True), "c", True)
-        self.assertEqual(t["cycle_cache_ack"], "0")
+        self.assertIsNone(t["cycle_cache_ack"])
+        self.assertIsNone(t["cycle_expires"])
         self.assertEqual(t["cycle_rank"], "2")
 
     def test_previous_focus_is_the_last_seen_pane(self):
@@ -151,7 +169,7 @@ class NextBlockTest(unittest.TestCase):
             queued("w2", "wt2", "0000000000001"),
         ]
         self.assertEqual(cycle.next_block_target(agents, self.WS, "s", "c"), "w1")
-        agents.append(queued("x", "other", "0000000000002", cycle_cache_ack="0", cache_expires="1793219084732"))
+        agents.append(queued("x", "other", "0000000000002", cycle_expires="1793219084732"))
         agents[1]["tokens"].pop("cycle_blocked")
         self.assertEqual(cycle.next_block_target(agents, self.WS, "s", "c"), "x")
 
@@ -220,8 +238,9 @@ class SyncTest(unittest.TestCase):
         self.sync(focused="a", now=100)
         a["tokens"] = {EXPIRES: EXP}  # its cache enters the window while you are on it
         self.sync(focused="b", now=200)
-        self.assertEqual(self.reports["a"]["cycle_cache_ack"], "1")
-        self.assertEqual(self.reports["b"]["cycle_cache_ack"], "0")
+        self.assertEqual(self.reports["a"]["cycle_cache_ack"], EXP)
+        self.assertIsNone(self.reports["a"]["cycle_expires"])
+        self.assertIsNone(self.reports["b"]["cycle_expires"])
 
     def test_an_expiring_agent_you_were_not_on_stays_up(self):
         a = {"pane_id": "a", "agent_status": "idle", "tokens": {EXPIRES: EXP}}
@@ -230,7 +249,7 @@ class SyncTest(unittest.TestCase):
         self.agents = [a, b, c]
         self.sync(focused="b", now=100)
         self.sync(focused="c", now=200)
-        self.assertEqual(self.reports["a"]["cycle_cache_ack"], "0")
+        self.assertEqual(self.reports["a"]["cycle_expires"], EXP)
 
     def test_a_waiting_agent_goes_after_one_visited_later(self):
         a = {"pane_id": "a", "agent_status": "working", "tokens": {WAIT: "tz-grab"}}

@@ -23,17 +23,19 @@ its wait for a job at the end of a turn. Such an agent needs nothing from you un
 the job ends, however long ago you visited it. Token changes invoke no plugin hook,
 so `start` (the startup hook and the sync action) also runs `watch`: one detached
 process per server that subscribes to pane.updated over the socket and re-syncs when
-a pane's wait started or ended, and exits when the server closes the connection.
+a pane's wait started or ended or its expiring cache appeared, changed or went, and exits when the server closes the connection.
 
 "Expires soon" is pi-cache-guard's `cache_expires` pane token (13-digit epoch ms of
 the expiry, present only in the last minutes of a big idle cache and dropped by
-herdr at expiry). The view sorts on it directly, so an agent moves up when the
-token appears without this plugin running; without cache-guard nothing changes.
+herdr at expiry). The plugin mirrors it into `cycle_expires` (dropped once you have
+been on the agent) and the watcher re-syncs when the two disagree, so an agent moves up
+when the token appears; without cache-guard nothing changes.
 
 Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_blocked  "0" blocked and unvisited, else absent
-  cycle_cache_ack  "1" once you were on the agent while its cache_expires was
-                   present (until that value changes or goes), else "0"
+  cycle_cache_ack  the cache_expires value you were on the agent for (until that
+                   value changes or goes), else absent
+  cycle_expires  cache_expires while present and not acknowledged, else absent
   cycle_rank  "0" blocked and unvisited, "1" done, "2" idle (and anything else),
               "3" working, "4" working and only waiting (pi-herdr's `wait` token)
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
@@ -92,8 +94,7 @@ def sort_spec(cur):
     return [
         {"field": {"token": cur}, "order": "asc"},
         {"field": {"token": "cycle_blocked"}, "order": "asc"},
-        {"field": {"token": "cycle_cache_ack"}, "order": "asc"},
-        {"field": {"token": EXPIRES}, "order": "asc"},
+        {"field": {"token": "cycle_expires"}, "order": "asc"},
         {"field": {"token": "cycle_rank"}, "order": "asc"},
         {"field": {"token": "cycle_seen"}, "order": "asc"},
     ]
@@ -149,6 +150,12 @@ def expires(agent):
     return (agent.get("tokens") or {}).get(EXPIRES)
 
 
+def expiring(agent, entry):
+    """The agent's cache_expires while it is not acknowledged, else None."""
+    exp = expires(agent)
+    return exp if exp and entry.get("ack") != exp else None
+
+
 def update_pane(agent, entry, now, on_it=False):
     """Track when a pane became blocked and whether you were on it while its cache
     was expiring (`on_it`); return the updated entry."""
@@ -192,7 +199,8 @@ def tokens_for(agent, entry, cur, is_current):
     exp = expires(agent)
     return {
         "cycle_blocked": "0" if blocked_unvisited(agent, entry) else None,
-        "cycle_cache_ack": "1" if exp and entry.get("ack") == exp else "0",
+        "cycle_cache_ack": exp if exp and entry.get("ack") == exp else None,
+        "cycle_expires": expiring(agent, entry),
         "cycle_rank": rank(agent, entry),
         "cycle_seen": stamp(seen) if seen else NEVER,
         cur: "1" if is_current else None,
@@ -302,15 +310,17 @@ def event_json():
 
 def updated_needs_sync(data):
     """Whether a pane.updated event changes the queue: the pane started or stopped only
-    waiting and its rank does not say so yet. Unreadable events re-sync."""
+    waiting, or its expiring cache appeared, changed or went, and its tokens do not say so yet. Unreadable events re-sync."""
     node = data.get("data") if isinstance(data.get("data"), dict) else data
     pane = node.get("pane")
     if not isinstance(pane, dict) or not pane.get("pane_id"):
         return True
     if not pane.get("agent"):
         return False
-    ranked = (pane.get("tokens") or {}).get("cycle_rank")
-    return (ranked == "4") != waiting(pane)
+    tokens = pane.get("tokens") or {}
+    exp = tokens.get(EXPIRES)
+    want = exp if exp and tokens.get("cycle_cache_ack") != exp else None
+    return (tokens.get("cycle_rank") == "4") != waiting(pane) or want != tokens.get("cycle_expires")
 
 
 def watch_events(lines, resync):

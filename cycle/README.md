@@ -55,10 +55,11 @@ the next agent.
 With [pi-cache-guard](https://github.com/justmytwospence/pi-plugins/tree/main/packages/pi-cache-guard)
 (through pi-herdr), an idle pi session whose warm prompt cache is big enough to warn
 about (`warn.minTokens`) reports `cache_expires` in its last `herdr.expiringMinutes`
-(default 10): the expiry as epoch ms, dropped by Herdr when it passes. The view sorts
-on that token directly, so the agent moves up as soon as it appears, with no event
-needed. Being on the agent while it is reported (landing on it, or being on it when it
-appears and then leaving) takes it back out, until a new turn reports a new expiry.
+(default 10): the expiry as epoch ms, dropped by Herdr when it passes. The plugin
+mirrors it into its own `cycle_expires` token, and the watcher (see below) re-syncs as
+soon as it appears, changes or goes. Being on the agent while it is reported (landing
+on it, or being on it when it appears and then leaving) returns it to its usual place,
+until a new turn reports a new expiry.
 The window and size threshold are cache-guard's settings. Without cache-guard the
 token never appears and the order is as above without step 3.
 
@@ -70,14 +71,15 @@ It needs nothing from you until the job ends, so it goes to the end of the queue
 however long ago you visited it, and comes back to its place when the wait ends.
 Token changes invoke no plugin hook, so the startup hook also starts a watcher: one
 detached `cycle.py watch` per server, subscribed to `pane.updated` over the socket,
-that re-syncs only when a pane's wait starts or ends and exits when the server closes
+that re-syncs only when a pane's wait starts or ends, or its expiring cache appears,
+changes or goes, and exits when the server closes
 the connection. After installing a new version, run the `sync` action (or restart
 Herdr) to replace the running watcher. Without pi-herdr and pi-bg the token never
 appears and the order is as above without step 7.
 
 ## Tokens
 
-It keeps hidden pane tokens (`cycle_blocked`, `cycle_cache_ack`, `cycle_rank`,
+It keeps hidden pane tokens (`cycle_blocked`, `cycle_cache_ack`, `cycle_expires`, `cycle_rank`,
 `cycle_seen`, `cycle_cur_<host>`) and replaces
 `ui.agent_panel_sort` with `agent.view.set`, reapplied by its startup hook. Run it on
 every connected machine: each server records focus on its own panes.
