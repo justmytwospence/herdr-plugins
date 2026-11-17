@@ -83,7 +83,8 @@ It keeps hidden pane tokens (`cycle_blocked`, `cycle_cache_ack`, `cycle_rank`,
 every connected machine: each server records focus on its own panes.
 
 Syncs (hooks and the watcher) are serialized by a lock on `sync.lock` in the plugin's
-state directory, so concurrent hooks keep each other's writes.
+state directory, so concurrent hooks keep each other's writes. The agent flagged current is
+the one Herdr reports focused when the sync runs, not the pane a focus event names.
 
 Requires Herdr 0.9.3+ and Python 3.9+ (stdlib only).
 

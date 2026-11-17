@@ -45,7 +45,9 @@ or a space of its own outside a repository. One press therefore steps over the r
 of a repo's worktree spaces instead of visiting them one at a time.
 
 Syncs are serialized by a lock on sync.lock in the state dir, so concurrent hooks and
-the watcher keep each other's writes.
+the watcher keep each other's writes. The agent flagged current is the one agent.list
+reports focused when the sync runs, not the pane a (possibly stale) focus event names;
+that event's pane is still recorded as visited.
 
 Usage: cycle.py start | sync | focus | watch | next-block
 """
@@ -212,7 +214,7 @@ def _sync(focused, now):
     state = {}
     for agent in agents:
         pid = agent["pane_id"]
-        is_current = pid == focused if focused else bool(agent.get("focused"))
+        is_current = bool(agent.get("focused"))
         prev = old.get(pid, {})
         entry = update_pane(agent, prev, now, on_it=is_current or pid == left)
         if pid == focused or (is_current and started_turn(prev, agent)) or cleared_done(prev, agent):

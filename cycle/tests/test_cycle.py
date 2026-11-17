@@ -202,6 +202,17 @@ class SyncTest(unittest.TestCase):
         with open(path, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+    def test_current_is_the_pane_herdr_reports_focused(self):
+        cur = cycle.current_token()
+        b = {"pane_id": "b", "agent_status": "idle", "focused": False, "tokens": {}}
+        c = {"pane_id": "c", "agent_status": "idle", "focused": True, "tokens": {}}
+        self.agents = [b, c]
+        self.sync(focused="b", now=100)  # a stale event: focus has already moved on to c
+        self.assertEqual(self.reports["c"][cur], "1")
+        self.assertIsNone(self.reports["b"][cur])
+        self.assertEqual(self.reports["b"]["cycle_seen"], cycle.stamp(100))
+        self.assertEqual(self.reports["c"]["cycle_seen"], NEVER)
+
     def test_leaving_an_expiring_agent_acknowledges_it(self):
         a = {"pane_id": "a", "agent_status": "idle", "tokens": {}}
         b = {"pane_id": "b", "agent_status": "idle", "tokens": {}}
