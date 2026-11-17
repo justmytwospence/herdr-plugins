@@ -51,6 +51,8 @@ update in a new directory and deletes old ones at server start. `daemon --ensure
 hook) also stops a daemon still running from another directory and starts it from the
 current one, so after an update run `agentbox-space daemon --ensure`, or restart herdr.
 
-Tests: `python3 -B -m unittest discover -s tests -t .`
+Install: `herdr plugin install justmytwospence/herdr-plugins/agentbox --ref <commit> --yes`.
+
+Tests: `python3 -B -m unittest discover -s tests -t .` (from this directory).
 
 MIT licensed.

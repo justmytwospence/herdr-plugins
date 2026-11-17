@@ -8,3 +8,6 @@ for dir in lib git-status undo sort-spaces cycle worktree-reaper; do
     echo "== $dir"
     (cd "$dir" && python3 -B -m unittest discover -s tests)
 done
+# agentbox's tests are a package (tests/__init__.py sandboxes HOME before any import).
+echo "== agentbox"
+(cd agentbox && python3 -B -m unittest discover -s tests -t .)
