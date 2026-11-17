@@ -1,3 +1,4 @@
+import fcntl
 import os
 import sys
 import tempfile
@@ -180,6 +181,26 @@ class SyncTest(unittest.TestCase):
     def sync(self, **kw):
         with mock.patch.object(cycle, "call", self.fake_call):
             cycle.sync(**kw)
+
+    def test_sync_holds_the_state_lock(self):
+        path = os.path.join(cycle.state_dir(), "sync.lock")
+        held = []
+
+        def fake(method, params):
+            if method == "agent.list":
+                with open(path, "a+") as f:
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held.append(False)
+                    except BlockingIOError:
+                        held.append(True)
+            return {}
+
+        with mock.patch.object(cycle, "call", fake):
+            cycle.sync(now=100)
+        self.assertEqual(held, [True])
+        with open(path, "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_leaving_an_expiring_agent_acknowledges_it(self):
         a = {"pane_id": "a", "agent_status": "idle", "tokens": {}}

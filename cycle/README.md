@@ -82,6 +82,9 @@ It keeps hidden pane tokens (`cycle_blocked`, `cycle_cache_ack`, `cycle_rank`,
 `ui.agent_panel_sort` with `agent.view.set`, reapplied by its startup hook. Run it on
 every connected machine: each server records focus on its own panes.
 
+Syncs (hooks and the watcher) are serialized by a lock on `sync.lock` in the plugin's
+state directory, so concurrent hooks keep each other's writes.
+
 Requires Herdr 0.9.3+ and Python 3.9+ (stdlib only).
 
 ```sh

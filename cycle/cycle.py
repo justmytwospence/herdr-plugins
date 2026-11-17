@@ -44,9 +44,13 @@ agent's block: a repository's spaces (its main checkout and its linked worktrees
 or a space of its own outside a repository. One press therefore steps over the rest
 of a repo's worktree spaces instead of visiting them one at a time.
 
+Syncs are serialized by a lock on sync.lock in the state dir, so concurrent hooks and
+the watcher keep each other's writes.
+
 Usage: cycle.py start | sync | focus | watch | next-block
 """
 
+import contextlib
 import fcntl
 import json
 import os
@@ -131,6 +135,14 @@ def save_state(state):
     os.replace(tmp, state_file())
 
 
+@contextlib.contextmanager
+def state_lock():
+    """Serialize syncs: hooks and the watcher run concurrently and would lose each other's writes."""
+    with open(os.path.join(state_dir(), "sync.lock"), "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
 def expires(agent):
     return (agent.get("tokens") or {}).get(EXPIRES)
 
@@ -186,6 +198,11 @@ def tokens_for(agent, entry, cur, is_current):
 
 
 def sync(focused=None, now=None):
+    with state_lock():
+        _sync(focused, now)
+
+
+def _sync(focused, now):
     now = now or now_ms()
     cur = current_token()
     old = load_state()
