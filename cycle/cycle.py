@@ -31,12 +31,19 @@ herdr at expiry). The plugin mirrors it into `cycle_expires` (dropped once you h
 been on the agent) and the watcher re-syncs when the two disagree, so an agent moves up
 when the token appears; without cache-guard nothing changes.
 
+Per pane the plugin also keeps read_seq (the agent's completion_seq when you last were
+on it) in its state file: an idle agent whose completion_seq is newer is unread, which
+Herdr's own `done` misses when it reports the completion seen (a replaced session, or
+a turn that ended in the active tab while the terminal was not focused). A pane first
+seen starts with its current completion read.
+
 Pane tokens (set with source plugin:agent-cycle, not displayed):
   cycle_blocked  "0" blocked and unvisited, else absent
   cycle_cache_ack  the cache_expires value you were on the agent for (until that
                    value changes or goes), else absent
   cycle_expires  cache_expires while present and not acknowledged, else absent
-  cycle_rank  "0" blocked and unvisited, "1" done, "2" idle (and anything else),
+  cycle_rank  "0" blocked and unvisited, "1" done or idle after a completion you have not
+              been on the agent since, "2" idle (and anything else),
               "3" working, "4" working and only waiting (pi-herdr's `wait` token)
   cycle_seen  13-digit epoch ms of the last focus ("0000000000000" if never)
   cycle_cur_<host>  "1" on this server's focused pane (see current_token)
@@ -181,11 +188,22 @@ def waiting(agent):
     return agent.get("agent_status") == "working" and bool((agent.get("tokens") or {}).get(WAIT))
 
 
+def completion(agent):
+    """Herdr's sequence number of the agent's last completion (0 if none reported)."""
+    return int(agent.get("completion_seq") or 0)
+
+
+def unread(agent, entry):
+    """Idle after a completion you have not been on the agent since (Herdr may report
+    it seen, e.g. when the session is replaced, so `done` alone misses it)."""
+    return agent.get("agent_status") == "idle" and completion(agent) > entry.get("read_seq", completion(agent))
+
+
 def rank(agent, entry):
     status = agent.get("agent_status")
     if blocked_unvisited(agent, entry):
         return "0"
-    if status == "done":
+    if status == "done" or unread(agent, entry):
         return "1"
     if waiting(agent):
         return "4"
@@ -225,8 +243,12 @@ def _sync(focused, now):
         is_current = bool(agent.get("focused"))
         prev = old.get(pid, {})
         entry = update_pane(agent, prev, now, on_it=is_current or pid == left)
-        if pid == focused or (is_current and started_turn(prev, agent)) or cleared_done(prev, agent):
+        entry.setdefault("read_seq", completion(agent))  # baseline: old completions are not unread
+        visited = pid == focused or (is_current and started_turn(prev, agent)) or cleared_done(prev, agent)
+        if visited:
             entry["seen"] = now
+        if visited or is_current:
+            entry["read_seq"] = completion(agent)
         entry["status"] = agent.get("agent_status")
         state[pid] = entry
         want = tokens_for(agent, entry, cur, is_current)

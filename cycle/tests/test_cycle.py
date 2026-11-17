@@ -39,6 +39,13 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(rank(agent(s), {}), "2")
         self.assertEqual(rank(agent("working"), {}), "3")
 
+    def test_unread_completion_ranks_with_done(self):
+        a = {"pane_id": "a", "agent_status": "idle", "completion_seq": 7}
+        self.assertEqual(rank(a, {"read_seq": 5}), "1")
+        self.assertEqual(rank(a, {"read_seq": 7}), "2")
+        self.assertEqual(rank(a, {}), "2")
+        self.assertEqual(rank(dict(a, agent_status="working"), {"read_seq": 5}), "3")
+
     def test_waiting_on_background_work_ranks_last(self):
         w = {"pane_id": "w1:p1", "agent_status": "working", "tokens": {WAIT: "tz-grab"}}
         self.assertEqual(rank(w, {}), "4")
@@ -230,6 +237,34 @@ class SyncTest(unittest.TestCase):
         self.assertIsNone(self.reports["b"][cur])
         self.assertEqual(self.reports["b"]["cycle_seen"], cycle.stamp(100))
         self.assertEqual(self.reports["c"]["cycle_seen"], NEVER)
+
+    def test_a_completion_after_you_left_ranks_with_done(self):
+        a = {"pane_id": "a", "agent_status": "idle", "focused": True, "completion_seq": 3, "tokens": {}}
+        b = {"pane_id": "b", "agent_status": "idle", "focused": False, "tokens": {}}
+        self.agents = [a, b]
+        self.sync(focused="a", now=100)
+        a["focused"], b["focused"] = False, True
+        self.sync(focused="b", now=200)
+        a["completion_seq"] = 5  # finished a turn while you were elsewhere
+        self.sync(now=300)
+        self.assertEqual(self.reports["a"]["cycle_rank"], "1")
+        a["focused"], b["focused"] = True, False
+        self.sync(focused="a", now=400)
+        self.assertEqual(self.reports["a"]["cycle_rank"], "2")
+
+    def test_a_completion_while_you_are_on_it_is_read(self):
+        a = {"pane_id": "a", "agent_status": "idle", "focused": True, "completion_seq": 3, "tokens": {}}
+        self.agents = [a]
+        self.sync(now=100)
+        a["completion_seq"] = 5
+        self.sync(now=200)
+        self.assertEqual(self.reports["a"]["cycle_rank"], "2")
+
+    def test_existing_completions_are_not_unread_on_first_sync(self):
+        a = {"pane_id": "a", "agent_status": "idle", "focused": False, "completion_seq": 9, "tokens": {}}
+        self.agents = [a]
+        self.sync(now=100)
+        self.assertEqual(self.reports["a"]["cycle_rank"], "2")
 
     def test_leaving_an_expiring_agent_acknowledges_it(self):
         a = {"pane_id": "a", "agent_status": "idle", "tokens": {}}

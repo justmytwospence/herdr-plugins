@@ -7,7 +7,8 @@ agent, across machines, while visiting what needs you first:
 2. blocked agents you have not visited since they blocked
 3. agents whose prompt cache expires soon, soonest first, that you have not been on
    since (needs pi-cache-guard; see below)
-4. finished agents Herdr still reports unseen (`done`)
+4. finished agents you have not been on since they finished (Herdr's `done`, or a
+   completion newer than your last visit)
 5. idle agents, least recently visited first
 6. working agents, least recently visited first
 7. agents whose turn only waits on background work (see below), least recently
